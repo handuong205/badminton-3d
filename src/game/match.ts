@@ -129,7 +129,6 @@ export class Match {
     const incomingSpeed = this.shuttleVel.length();
     const window = swingWindow(incomingSpeed);
     if (Math.abs(dt) > window || !p.inContactZone(this.shuttlePos)) return;
-    if (Math.abs(dt) > SWING.window || !p.inContactZone(this.shuttlePos)) return;
 
     if (dt < 0) {
       const nextPos = this.shuttlePos.clone();
@@ -137,8 +136,8 @@ export class Match {
       if (p.inContactZone(nextPos)) return; // vẫn còn trong vùng, đợi vợt tới đúng điểm
     }
     const reach = p.reach(this.shuttlePos)!;
-    const timing = 1 - 0.6 * Math.abs(dt) / SWING.window;
-    // Với tay xa thì không dồn được lực: cắt lực theo powerCap, và tốn thêm thể lực
+    const timing = 1 - 0.6 * Math.abs(dt) / window;
+    // Lực = max(lực đã nạp, lực bật lại từ cầu nhanh); với tay xa thì bị cắt theo powerCap
     const power = Math.min(Math.max(sw.power, reboundPower(incomingSpeed)), reach.powerCap);
     if (reach.stretched) p.spend(CONTACT.stretchStamina);
     this.hit(p, { ...sw, power }, timing * reach.spatial, reach.stretched);

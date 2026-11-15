@@ -7,7 +7,7 @@ import {
 export function createWorld() {
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x87ceeb);
-  const camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.1, 200);
+  const camera = new THREE.PerspectiveCamera(65, innerWidth / innerHeight, 0.1, 200);
   const renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setSize(innerWidth, innerHeight);
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));

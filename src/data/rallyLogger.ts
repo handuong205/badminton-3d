@@ -46,6 +46,7 @@ export class RallyLogger {
         shot: e.shot,
         power: r2(e.power),
         quality: r2(e.quality),
+        stretched: e.stretched,
         contact: vec(e.contact),
         vel_in: vec(e.velIn),
         vel_out: vec(e.velOut),

@@ -13,10 +13,10 @@ export interface PlayerConfig {
 
 // ===== Di chuyển (số liệu gần với vận động viên phong trào khá) =====
 export const MOVE = {
-  walk: 5.0,          // m/s, di chuyển thường
-  sprint: 7.0,        // m/s, giữ Shift
-  accel: 32,          // m/s^2, không thể đổi hướng/tăng tốc tức thì
-  dashDist: 1.6,      // m, bứt tốc (giống bước lunge ra cứu cầu)
+  walk: 4.5,          // m/s, di chuyển thường
+  sprint: 6.2,        // m/s, giữ Shift
+  accel: 26,          // m/s^2: từ đứng yên lên tốc độ chạy nhanh mất ~0.24 s
+  dashDist: 1.8,      // m, bứt tốc (giống bước lunge ra cứu cầu)
   dashTime: 0.22,     // s
   dashCooldown: 0.8,  // s
 };
@@ -31,16 +31,16 @@ export const STAMINA = {
   regenPerSec: 8,
   regenDelay: 0.5,     // phải ngừng tiêu hao 0.5 s mới bắt đầu hồi
   betweenPoints: 30,   // hồi thêm khi nghỉ giữa 2 điểm
-  minForSprint: 20, 
-  sprintKeepMin: 5,   // dưới mức này không chạy nhanh / bứt tốc được
+  minForSprint: 20,     // dưới mức này không BẮT ĐẦU chạy nhanh/ bứt tốc được
+  sprintKeepMin: 5,   // đang chạy nhanh thì được chạy tiếp tới khi còn 5
 };
 
 // ===== Vung vợt =====
 export const CHARGE_TIME = 0.7;  // giữ 0.7 s thì đầy 100% lực
 export const SWING = {
   impact: 0.12,   // vợt tới điểm đánh sau 0.12 s kể từ lúc nhả phím
-  window: 0.07,
-  windowMax: 0.12,   // cầu tới sớm/trễ hơn impact tối đa 0.07 s vẫn chạm vợt (nhưng kém chuẩn)
+  window: 0.07,  // cầu tới sớm/trễ tối đa 0.07 s vẫn chạm vợt
+  windowMax: 0.12,   // với cầu nhanh (cú đập) cửa sổ nới dần tới 0.12 s
   cooldown: 0.45, // tính từ lúc nhả phím, trước khi được nạp lực lần sau
 };
 
@@ -91,6 +91,7 @@ export class Player {
   stamina = STAMINA.max;
   chargingShot: ShotType | null = null;
   chargeTime = 0;
+  chargeAim: Aim = 0;     // hướng trái/phải đang giữ lúc nạp lực (chỉ để vẽ vòng nhắm)
   swing: Swing | null = null;
   cooldown = 0;
   controller!: Controller;
@@ -152,7 +153,6 @@ export class Player {
       this.dashDir.copy(dir).normalize();
       this.dashTimer = MOVE.dashTime;
       this.dashCd = MOVE.dashCooldown;
-      // trong move(), lúc bắt đầu bứt tốc
       this.lungeTimer = MOVE.dashTime + CONTACT.lungeWindow;
       this.spend(STAMINA.dashCost);
     }
@@ -187,6 +187,7 @@ export class Player {
       if (this.chargingShot === null) this.chargeTime = 0;
       else this.chargeTime += dt;
       this.chargingShot = charge;   // đổi phím giữa chừng thì đổi loại cú, giữ nguyên lực đã nạp
+      this.chargeAim = aim;         // hướng đang giữ, để vẽ vòng nhắm
       return null;
     }
     if (!charge && this.chargingShot) {
@@ -207,7 +208,6 @@ export class Player {
     return Math.hypot(p.x - this.pos.x, p.z - this.pos.z);
   }
 
-  /** Điểm p có nằm trong vùng mặt vợt quét qua không */
     get maxReach(): number {
     return CONTACT.stretchMax + (this.lungeTimer > 0 ? CONTACT.lungeBonus : 0);
   }

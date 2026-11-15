@@ -10,8 +10,9 @@ import { ThirdPersonCamera } from './render/camera';
 import { PlayerView, ShuttleView } from './render/entities';
 import { createWorld } from './render/scene';
 import { FIXED_DT } from './shared/physics';
-import { Hud } from './ui/hud';
+import { Hud, LOG_DOWNLOAD_ENABLED } from './ui/hud';
 import { LandingMarker } from './render/landingMarker';
+import { AimMarker } from './render/aimMarker';
 import { StatusBars } from './render/statusBars';
 
 // ===== Khởi tạo logic trận đấu =====
@@ -33,6 +34,8 @@ const shuttleView = new ShuttleView();
 scene.add(shuttleView.group);
 const landing = new LandingMarker(match, human); // chỉ cho người chơi trên máy này
 scene.add(landing.mesh);
+const aimMarker = new AimMarker(match, human); // hướng đánh lúc nạp lực, cũng chỉ cho người chơi trên máy này
+scene.add(aimMarker.group);
 const bars = new StatusBars(human); // thanh lực + thể lực, cũng chỉ cho người chơi trên máy này
 scene.add(bars.group);
 const cam = new ThirdPersonCamera(camera, human);
@@ -47,14 +50,15 @@ function loop() {
   const frameDt = Math.min(timer.getDelta(), 0.1);
   acc += frameDt;
   if (kb.consume('KeyR') && match.phase === 'matchOver') match.restart();
-  if (kb.consume('KeyP')) logger.download();
+  if (kb.consume('KeyP') && LOG_DOWNLOAD_ENABLED) logger.download();
   while (acc >= FIXED_DT) { match.update(FIXED_DT); acc -= FIXED_DT; }
 
   for (const v of views) v.sync(frameDt, match.shuttlePos);
   shuttleView.sync(match.shuttlePos, match.shuttleVel);
   landing.update();
+  aimMarker.update();
   bars.sync();
-  cam.update();
+  cam.update(match.shuttlePos);
   hud.update(logger.count);
   renderer.render(scene, camera);
   requestAnimationFrame(loop);

@@ -12,8 +12,8 @@ export interface AIDifficulty {
   replanEvery: number;    // giây, bao lâu tính lại điểm đón cầu
   timingNoise: number;    // giây, độ lệch chuẩn khi canh thời điểm nhả vợt -> sinh ra cú lệch vợt / vung hụt
   powerNoise: number;     // độ lệch chuẩn của lực so với lực cần (0.04 = 4%)
-  smashChance: number; 
-  smashPower: [number, number];   // xác suất đập khi có cơ hội
+  smashChance: number;      // xác suất đập khi có cơ hội
+  smashPower: [number, number];  // khoảng lực khi đập 
   leaveOutMargin: number; // cầu dự đoán ra ngoài quá mức này (m) thì bỏ, không đỡ
 }
 
