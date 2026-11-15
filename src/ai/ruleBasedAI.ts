@@ -12,12 +12,13 @@ export interface AIDifficulty {
   replanEvery: number;    // giây, bao lâu tính lại điểm đón cầu
   timingNoise: number;    // giây, độ lệch chuẩn khi canh thời điểm nhả vợt -> sinh ra cú lệch vợt / vung hụt
   powerNoise: number;     // độ lệch chuẩn của lực so với lực cần (0.04 = 4%)
-  smashChance: number;    // xác suất đập khi có cơ hội
+  smashChance: number; 
+  smashPower: [number, number];   // xác suất đập khi có cơ hội
   leaveOutMargin: number; // cầu dự đoán ra ngoài quá mức này (m) thì bỏ, không đỡ
 }
 
 export const NORMAL: AIDifficulty = {
-  reactionTime: 0.22, replanEvery: 0.1, timingNoise: 0.035, powerNoise: 0.05, smashChance: 0.45, leaveOutMargin: 0.15,
+  reactionTime: 0.22, replanEvery: 0.1, timingNoise: 0.035, powerNoise: 0.05, smashChance: 0.45, smashPower: [0.45, 0.7], leaveOutMargin: 0.15,
 };
 
 /** Số ngẫu nhiên phân phối chuẩn (Box-Muller) */
@@ -155,7 +156,7 @@ export class RuleBasedAI implements Controller {
     const m = this.match;
     let p: number;
     if (shot === 'smash') {
-      p = THREE.MathUtils.randFloat(0.5, 0.8);
+      p = THREE.MathUtils.randFloat(this.diff.smashPower[0], this.diff.smashPower[1]);
     } else {
       const target = aimPoint(this.me.side, shot, aim, m.serveRight);
       const v = solveLaunch(contact, target, SHOT_SPEC[shot].pitch ?? 0).length();

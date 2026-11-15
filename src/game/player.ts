@@ -38,7 +38,8 @@ export const STAMINA = {
 export const CHARGE_TIME = 0.7;  // giữ 0.7 s thì đầy 100% lực
 export const SWING = {
   impact: 0.12,   // vợt tới điểm đánh sau 0.12 s kể từ lúc nhả phím
-  window: 0.07,   // cầu tới sớm/trễ hơn impact tối đa 0.07 s vẫn chạm vợt (nhưng kém chuẩn)
+  window: 0.07,
+  windowMax: 0.12,   // cầu tới sớm/trễ hơn impact tối đa 0.07 s vẫn chạm vợt (nhưng kém chuẩn)
   cooldown: 0.45, // tính từ lúc nhả phím, trước khi được nạp lực lần sau
 };
 
@@ -59,6 +60,20 @@ export interface Reach {
   spatial: number;   // 0..1, độ chuẩn do vị trí
   powerCap: number;  // lực tối đa đánh được ở vị trí này
   stretched: boolean;
+}
+
+/** Cửa sổ chạm vợt theo tốc độ cầu tới: cầu chậm (<= 8 m/s) 0.07 s, cầu nhanh (>= 20 m/s) 0.12 s */
+export function swingWindow(incomingSpeed: number): number {
+  const t = THREE.MathUtils.clamp((incomingSpeed - 8) / 12, 0, 1);
+  return SWING.window + (SWING.windowMax - SWING.window) * t;
+}
+
+/**
+ * Lực bật lại: đỡ cầu nhanh thì vợt tận dụng được năng lượng của chính quả cầu.
+ * Cầu tới 9 m/s cho khoảng 18% lực, 18 m/s cho khoảng 60% (tối đa), dù người chơi không nạp lực.
+ */
+export function reboundPower(incomingSpeed: number): number {
+  return THREE.MathUtils.clamp((incomingSpeed - 5) / 22, 0, 0.6);
 }
 
 /** Một lần vung vợt đang diễn ra */
@@ -119,7 +134,7 @@ export class Player {
     if (this.sinceSpend >= STAMINA.regenDelay) this.recover(STAMINA.regenPerSec * dt);
     if (this.swing) {
       this.swing.t += dt;
-      if (this.swing.t > SWING.impact + SWING.window) { this.swing = null; return true; }
+      if (this.swing.t > SWING.impact + SWING.windowMax) { this.swing = null; return true; }
     }
     return false;
   }

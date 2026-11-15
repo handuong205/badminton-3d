@@ -7,7 +7,8 @@ import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
  * File đặt ở public/models/ nên Vite phục vụ tại đường dẫn /models/...
  */
 const MODEL_URL = '/models/RobotExpressive.glb';
-export const CHARACTER_HEIGHT = 1.75; // m, scale model về chiều cao người thật
+// Robot có đầu to, tay dang rộng (rộng ~0.67 x chiều cao). Để 1.35 m thì rộng ~0.9 m, cân đối với sân hơn
+export const CHARACTER_HEIGHT = 1.35; // m, scale model về chiều cao người thật
 
 export interface CharacterAsset {
   scene: THREE.Group;

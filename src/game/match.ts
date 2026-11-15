@@ -7,7 +7,8 @@ import {
 import { aimPoint, deflect, isServe, launchDirection, speedForPower } from '../shared/shots';
 import type { Phase, PointReason, Score, ShotType, Side } from '../shared/types';
 import { other, sideSign } from '../shared/types';
-import { CONTACT, Player, STAMINA, SWING, type Swing } from './player';
+import { CONTACT, Player, STAMINA, SWING, reboundPower, swingWindow, type Swing } from './player';
+
 
 /** Sự kiện phát ra để phần ghi log (data/) và giao diện (ui/) lắng nghe */
 export type MatchEvent =
@@ -125,6 +126,9 @@ export class Match {
     if (!sw || this.lastHitter === p.side) return;
     if (Math.sign(this.shuttlePos.z) !== sideSign(p.side)) return; // chưa qua lưới thì không được đánh
     const dt = sw.t - SWING.impact;
+    const incomingSpeed = this.shuttleVel.length();
+    const window = swingWindow(incomingSpeed);
+    if (Math.abs(dt) > window || !p.inContactZone(this.shuttlePos)) return;
     if (Math.abs(dt) > SWING.window || !p.inContactZone(this.shuttlePos)) return;
 
     if (dt < 0) {
@@ -135,7 +139,7 @@ export class Match {
     const reach = p.reach(this.shuttlePos)!;
     const timing = 1 - 0.6 * Math.abs(dt) / SWING.window;
     // Với tay xa thì không dồn được lực: cắt lực theo powerCap, và tốn thêm thể lực
-    const power = Math.min(sw.power, reach.powerCap);
+    const power = Math.min(Math.max(sw.power, reboundPower(incomingSpeed)), reach.powerCap);
     if (reach.stretched) p.spend(CONTACT.stretchStamina);
     this.hit(p, { ...sw, power }, timing * reach.spatial, reach.stretched);
   }

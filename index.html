@@ -1,12 +1,20 @@
 <!doctype html>
 <html lang="vi">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Badminton 3D</title>
-  </head>
-  <body class="m-0 h-screen overflow-hidden bg-black">
-    <div id="hud" class="fixed top-3 left-3 rounded-md bg-black/50 px-3 py-2 font-mono text-sm leading-relaxed whitespace-pre text-white"></div>
-    <script type="module" src="./src/main.ts"></script>
-  </body>
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Badminton 3D</title>
+</head>
+
+<body class="m-0 h-screen overflow-hidden bg-black">
+  <div id="hud"
+    class="pointer-events-none fixed top-3 left-3 rounded-md bg-black/40 px-3 py-1.5 font-mono text-sm leading-snug whitespace-pre text-white">
+  </div>
+  <div id="help"
+    class="pointer-events-none fixed bottom-3 left-3 rounded-md bg-black/30 px-2 py-1 font-mono text-xs leading-snug whitespace-pre text-white/80">
+  </div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+
 </html>
