@@ -30,7 +30,7 @@ const { scene, camera, renderer } = createWorld();
 const views = [new PlayerView(human, 0x1565c0), new PlayerView(ai, 0xc62828)];
 for (const v of views) scene.add(v.group);
 const shuttleView = new ShuttleView();
-scene.add(shuttleView.mesh, shuttleView.marker);
+scene.add(shuttleView.group);
 const landing = new LandingMarker(match, human); // chỉ cho người chơi trên máy này
 scene.add(landing.mesh);
 const bars = new StatusBars(human); // thanh lực + thể lực, cũng chỉ cho người chơi trên máy này

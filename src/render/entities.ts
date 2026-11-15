@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { Player } from '../game/player';
-import { type CharacterAsset, instantiateCharacter, loadCharacter } from './characterAsset';
+import { CHARACTER_HEIGHT, type CharacterAsset, instantiateCharacter, loadCharacter } from './characterAsset';
 
 /** Mesh người chơi (tạm dùng capsule) + vợt; sáng lên khi đang vung vợt */
 /** Vợt cầu lông dựng bằng khối cơ bản, đơn vị mét. Mặt vợt sáng dần khi nạp lực */
@@ -21,7 +21,9 @@ function makeRacket(): { group: THREE.Group; headMat: THREE.MeshStandardMaterial
 }
 
 type AnimName = 'Idle' | 'Walking' | 'Running' | 'Punch';
-
+// Model nhỏ thì sải chân ngắn, phải đánh chân nhanh hơn mới khớp tốc độ, không bị "trượt" trên sàn
+const ANIM_SPEED = 1.75 / CHARACTER_HEIGHT;
+const MAX_LEAN = 0.7; // m, thân lướt về phía cầu tối đa bao nhiêu khi vươn (chỉ để vẽ)
 /**
  * Hình 3D của người chơi. Lúc đầu là capsule tạm, tải xong model glTF thì thay bằng robot có hoạt ảnh.
  * Chỉ ĐỌC trạng thái Player để chọn hoạt ảnh, không sửa logic.
@@ -42,6 +44,7 @@ export class PlayerView {
   private armDirLocal = new THREE.Vector3();  // hướng "dọc cánh tay" trong hệ tọa độ của xương vai
   private armWeight = 0;                       // 0 = theo hoạt ảnh gốc, 1 = vươn hẳn về phía cầu
   private readonly racketRest = new THREE.Quaternion();
+  private readonly lean = new THREE.Vector3();          // độ lệch thân về phía cầu: x/z = bước lunge, y = nhảy (chỉ để vẽ)
     /**
    * Xoay xương vai phải để cánh tay chĩa về phía quả cầu, chồng lên hoạt ảnh gốc.
    * Đang vung: vươn hẳn (weight 1). Đang nạp lực và cầu ở gần: chuẩn bị (0.5). Còn lại: thả về hoạt ảnh gốc.
@@ -57,12 +60,11 @@ export class PlayerView {
     this.armWeight += (want - this.armWeight) * Math.min(1, dt * 15);
     if (this.armWeight < 0.01) {
       this.racket.group.quaternion.copy(this.racketRest);
-      this.body.position.y = 0;
+      this.lean.multiplyScalar(Math.max(0, 1 - dt * 10)); // thu thân về chỗ cũ
+      this.body.position.copy(this.lean);
       return;
     }
 
-    // Cầu cao: bật nhảy lên (tối đa 0.8 m) để vợt với tới, nhìn như nhảy đập
-    this.body.position.y = this.armWeight * THREE.MathUtils.clamp(shuttle.y - 1.9, 0, 0.8) * (p.swing ? 1 : 0.3);
 
     upper.updateWorldMatrix(true, false);
     const shoulder = upper.getWorldPosition(new THREE.Vector3());
@@ -85,6 +87,25 @@ export class PlayerView {
     const alongArm = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), toShuttle);
     const racketLocal = handQ.invert().multiply(alongArm);
     racket.quaternion.copy(this.racketRest).slerp(racketLocal, this.armWeight);
+
+    
+    // Bước lunge (chỉ để vẽ): tay robot ngắn hơn tầm với trong luật (tới 1.6 m),
+    // nên lướt thân về phía cầu đúng bằng khoảng còn thiếu, để mặt vợt chạm cầu.
+    // Mỗi khung hình đo lại khoảng hở và chỉnh dần, sau vài khung là khớp.
+    racket.updateWorldMatrix(true, false);
+    const head = racket.localToWorld(new THREE.Vector3(0, 0.52, 0)); // tâm mặt vợt
+    const gap = shuttle.clone().sub(head);
+    const target = new THREE.Vector3(this.lean.x + gap.x, 0, this.lean.z + gap.z); // chỉ theo phương ngang
+    if (target.length() > MAX_LEAN) target.setLength(MAX_LEAN);
+    target.multiplyScalar(this.armWeight);
+    const k = Math.min(1, dt * 20);
+    this.lean.x += (target.x - this.lean.x) * k;
+    this.lean.z += (target.z - this.lean.z) * k;
+    // Cầu cao: bật nhảy (tối đa 1.1 m, hơi quá sức người thật cho robot thấp với tới cầu cao 2.9 m) bù phần thiếu theo chiều cao, nhìn như nhảy đập.
+    // Lúc mới nạp lực thì chỉ nhún nhẹ (30%), nhả phím vung mới nhảy hẳn
+    const jumpTarget = THREE.MathUtils.clamp(this.lean.y + gap.y, 0, 1.1) * this.armWeight * (p.swing ? 1 : 0.3);
+    this.lean.y += (jumpTarget - this.lean.y) * Math.min(1, dt * 20);
+    this.body.position.copy(this.lean);
   } // góc cầm vợt lúc bình thường
 
   constructor(player: Player, color: number) {
@@ -156,8 +177,9 @@ export class PlayerView {
     const swinging = p.swing !== null;
     if (swinging && !this.wasSwinging) this.play('Punch', 2.2);    // vừa nhả phím -> vung
     else if (this.current !== 'Punch' || !this.actions.get('Punch')?.isRunning()) {
-      if (speed > 5) this.play('Running', speed / 5);
-      else if (speed > 0.3) this.play('Walking', speed / 2);
+    // Chạy nhanh (Shift) hoặc tốc độ cao thì dùng hoạt ảnh Running, chuyển ngay khi bấm Shift
+      if (p.isSprinting || p.isDashing || speed > 3.5) this.play('Running', (speed / 5) * ANIM_SPEED);
+      else if (speed > 0.3) this.play('Walking', (speed / 2) * ANIM_SPEED);
       else this.play('Idle');
     }
     this.wasSwinging = swinging;
@@ -168,26 +190,76 @@ export class PlayerView {
   }
 }
 
-/** Quả cầu: đế cầu luôn hướng theo chiều bay; vẽ thêm bóng mờ dưới sàn để dễ đoán vị trí */
+const TRAIL_LEN = 20; // số điểm của vệt bay (khoảng 1/3 giây)
+
+/**
+ * Quả cầu, cố tình vẽ to hơn thật (x2) cho dễ nhìn, kèm 3 thứ hỗ trợ mắt:
+ * - Vệt bay phía sau, mờ dần: thấy được hướng và tốc độ cầu.
+ * - Đường dọc từ cầu xuống sàn + bóng tròn dưới sàn: đoán được độ cao và vị trí.
+ */
 export class ShuttleView {
-  readonly mesh = new THREE.Mesh(
-    new THREE.ConeGeometry(0.06, 0.12, 12),
-    new THREE.MeshStandardMaterial({ color: 0xffffff }),
+  readonly group = new THREE.Group();
+  private readonly mesh = new THREE.Mesh(
+    new THREE.ConeGeometry(0.12, 0.22, 16),
+    new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xffffff, emissiveIntensity: 0.6 }),
   );
-  readonly marker = new THREE.Mesh(
-    new THREE.CircleGeometry(0.12, 16),
+  private readonly cork = new THREE.Mesh(
+    new THREE.SphereGeometry(0.06, 12, 8),
+    new THREE.MeshStandardMaterial({ color: 0xff5722 }), // đế cầu màu cam để thấy hướng bay
+  );
+  private readonly marker = new THREE.Mesh(
+    new THREE.CircleGeometry(0.14, 16),
     new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.35 }),
   );
+  private readonly drop: THREE.Line;
+  private readonly trail: THREE.Line;
+  private readonly trailPts: THREE.Vector3[] = [];
   private readonly up = new THREE.Vector3(0, -1, 0);
 
   constructor() {
     this.mesh.castShadow = true;
+    this.cork.position.y = -0.11;
+    this.mesh.add(this.cork);
     this.marker.rotation.x = -Math.PI / 2;
+
+    this.drop = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]),
+      new THREE.LineDashedMaterial({ color: 0xffffff, dashSize: 0.15, gapSize: 0.1, transparent: true, opacity: 0.5 }),
+    );
+
+    const tg = new THREE.BufferGeometry();
+    tg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(TRAIL_LEN * 3), 3));
+    const colors = new Float32Array(TRAIL_LEN * 3);
+    for (let i = 0; i < TRAIL_LEN; i++) colors.fill(1 - i / TRAIL_LEN, i * 3, i * 3 + 3); // trắng -> đen (mờ dần)
+    tg.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    this.trail = new THREE.Line(tg, new THREE.LineBasicMaterial({ vertexColors: true, blending: THREE.AdditiveBlending, transparent: true }));
+    this.trail.frustumCulled = false;
+
+    this.group.add(this.mesh, this.marker, this.drop, this.trail);
   }
 
   sync(pos: THREE.Vector3, vel: THREE.Vector3): void {
     this.mesh.position.copy(pos);
     if (vel.lengthSq() > 0.01) this.mesh.quaternion.setFromUnitVectors(this.up, vel.clone().normalize());
     this.marker.position.set(pos.x, 0.02, pos.z);
+
+    // Đường dọc xuống sàn
+    const dp = this.drop.geometry.attributes.position as THREE.BufferAttribute;
+    dp.setXYZ(0, pos.x, pos.y, pos.z);
+    dp.setXYZ(1, pos.x, 0.02, pos.z);
+    dp.needsUpdate = true;
+    this.drop.computeLineDistances();
+    this.drop.visible = pos.y > 0.3;
+
+    // Vệt bay: chỉ ghi khi cầu đang bay, đứng yên thì xóa dần
+    if (vel.lengthSq() > 0.01) this.trailPts.unshift(pos.clone());
+    else this.trailPts.pop();
+    if (this.trailPts.length > TRAIL_LEN) this.trailPts.length = TRAIL_LEN;
+    const tp = this.trail.geometry.attributes.position as THREE.BufferAttribute;
+    for (let i = 0; i < TRAIL_LEN; i++) {
+      const p = this.trailPts[Math.min(i, this.trailPts.length - 1)] ?? pos;
+      tp.setXYZ(i, p.x, p.y, p.z);
+    }
+    tp.needsUpdate = true;
   }
 }

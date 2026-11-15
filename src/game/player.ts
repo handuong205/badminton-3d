@@ -13,9 +13,9 @@ export interface PlayerConfig {
 
 // ===== Di chuyển (số liệu gần với vận động viên phong trào khá) =====
 export const MOVE = {
-  walk: 3.5,          // m/s, di chuyển thường
-  sprint: 5.2,        // m/s, giữ Shift
-  accel: 14,          // m/s^2, không thể đổi hướng/tăng tốc tức thì
+  walk: 5.0,          // m/s, di chuyển thường
+  sprint: 7.0,        // m/s, giữ Shift
+  accel: 32,          // m/s^2, không thể đổi hướng/tăng tốc tức thì
   dashDist: 1.6,      // m, bứt tốc (giống bước lunge ra cứu cầu)
   dashTime: 0.22,     // s
   dashCooldown: 0.8,  // s
@@ -31,7 +31,8 @@ export const STAMINA = {
   regenPerSec: 8,
   regenDelay: 0.5,     // phải ngừng tiêu hao 0.5 s mới bắt đầu hồi
   betweenPoints: 30,   // hồi thêm khi nghỉ giữa 2 điểm
-  minForSprint: 20,    // dưới mức này không chạy nhanh / bứt tốc được
+  minForSprint: 20, 
+  sprintKeepMin: 5,   // dưới mức này không chạy nhanh / bứt tốc được
 };
 
 // ===== Vung vợt =====
@@ -99,6 +100,7 @@ export class Player {
   private sinceSpend = 0;
   private dashTimer = 0;
   private dashCd = 0;
+  private sprintingNow = false; // đang chạy nhanh (để giữ trạng thái khi thể lực tụt dưới 20)
   private lungeTimer = 0;    // > 0: vừa bứt tốc, được với xa hơn
   private readonly dashDir = new THREE.Vector3();
 
@@ -115,7 +117,7 @@ export class Player {
   }
 
   get isDashing(): boolean { return this.dashTimer > 0; }
-
+  get isSprinting(): boolean { return this.sprintingNow; }
   spend(amount: number): void {
     this.stamina = Math.max(0, this.stamina - amount);
     this.sinceSpend = 0;
@@ -159,7 +161,10 @@ export class Player {
       this.vel.copy(this.dashDir).multiplyScalar(MOVE.dashDist / MOVE.dashTime);
       if (!this.isDashing) this.vel.setLength(MOVE.walk); // hết bứt tốc thì về tốc độ thường
     } else {
-      const sprinting = intent.sprint && canBurst && dir.lengthSq() > 0.01;
+      // Bắt đầu chạy nhanh cần >= 20 thể lực; đã chạy rồi thì được chạy tiếp tới khi còn 5
+      const enough = this.sprintingNow ? this.stamina > STAMINA.sprintKeepMin : canBurst;
+      const sprinting = intent.sprint && enough && dir.lengthSq() > 0.01;
+      this.sprintingNow = sprinting;
       if (sprinting) this.spend(STAMINA.sprintPerSec * dt);
       const want = dir.multiplyScalar(sprinting ? MOVE.sprint : MOVE.walk);
       // Tiến vận tốc hiện tại về vận tốc mong muốn, mỗi bước thay đổi tối đa accel*dt
@@ -171,7 +176,7 @@ export class Player {
     this.pos.addScaledVector(this.vel, dt);
   }
 
-  stop(): void { this.vel.set(0, 0, 0); this.dashTimer = 0; }
+   stop(): void { this.vel.set(0, 0, 0); this.dashTimer = 0; this.sprintingNow = false; }
 
   /**
    * Xử lý thanh lực. Giữ phím = nạp lực, nhả phím = bắt đầu vung.
