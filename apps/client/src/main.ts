@@ -129,7 +129,8 @@ function startOnline(room: Room, welcome: WelcomeMsg): void {
       hud.lastHelpLine = `R đấu lại (khi hết ván) | ${muteHelp(view.sfx.muted)} | Esc rời phòng`;
       hud.setInvite(waiting ? inviteLink(welcome.code) : null);
       hud.messageOverride = dropped ? 'Mất kết nối, đang thử kết nối lại...' : game.localMessage;
-      const ping = `ping ${Math.round(game.rtt * 1000)} ms`;
+      // Ping ± độ dao động: dao động lớn (> 30 ms) là mạng chập chờn, đối thủ sẽ được vẽ trễ hơn để vẫn mượt
+      const ping = `ping ${Math.round(game.rtt * 1000)} ±${Math.round(game.jitter * 1000)} ms`;
       hud.extra = waiting
         ? `MÃ PHÒNG: ${welcome.code}  (gửi mã này cho đối thủ)`
         : `Phòng ${welcome.code} | ${ping}${game.connectedOpp ? '' : ' | đối thủ mất kết nối'}`;
