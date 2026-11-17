@@ -1,24 +1,50 @@
 import * as THREE from 'three';
-import { FIXED_DT, stepShuttle } from './physics';
+import { FIXED_DT, solveShot, stepShuttle } from './physics';
 import {
   HALF_LEN, NET_H, SHORT_SERVICE, SINGLES_HALF_W,
   courtXSign, gameWinner, isInServiceBox, isInSinglesCourt, serveFromRight,
 } from './rules';
-import { aimPoint, deflect, isServe, launchDirection, speedForPower } from './shots';
+import { SHOT_SPEC, SMASH_MIN_HEIGHT, aimPoint, deflect, isServe, launchDirection, smashSpeed } from './shots';
 import type { Phase, PointReason, Score, ShotType, Side } from './types';
 import { other, sideSign } from './types';
-import { CONTACT, Player, STAMINA, SWING, reboundPower, swingWindow, type Swing } from './player';
+import { CONTACT, JUMP, Player, STAMINA, SWING, reboundPower, swingImpact, swingWindow, type Swing } from './player';
 
 
 /** Sự kiện phát ra để phần ghi log (data/) và giao diện (ui/) lắng nghe */
 export type MatchEvent =
   | {
-      type: 'hit'; hitter: Side; shot: ShotType; power: number; quality: number; stretched: boolean;
+      type: 'hit'; hitter: Side; shot: ShotType; power: number; quality: number; stretched: boolean; jump: boolean;
       contact: THREE.Vector3; velIn: THREE.Vector3; velOut: THREE.Vector3; target: THREE.Vector3;
     }
   | { type: 'whiff'; player: Side }
   | { type: 'point'; winner: Side; reason: PointReason; landing: THREE.Vector3 }
   | { type: 'matchOver'; winner: Side };
+
+/** Vị trí quả cầu sau `ahead` giây nữa (mô phỏng trước, không làm thay đổi cầu thật) */
+function shuttleAfter(pos: THREE.Vector3, vel: THREE.Vector3, ahead: number): THREE.Vector3 {
+  const p = pos.clone(), v = vel.clone();
+  for (let t = 0; t < ahead - 1e-9 && p.y > 0; t += FIXED_DT) stepShuttle(p, v, FIXED_DT);
+  return p;
+}
+
+/**
+ * Nếu nhả phím đập NGAY BÂY GIỜ thì có tự bật nhảy không?
+ * Có khi: đứng đánh thì lúc vợt tới cầu còn cao quá tầm với (CONTACT.maxY),
+ * còn bật nhảy thì lúc lên đỉnh cầu nằm ở dải cao với tới được nhờ nhảy, và đủ thể lực.
+ * Cầu rơi gần như thẳng đứng ~6.8 m/s nên phải nhả khi cầu còn cao hơn điểm chạm ~1.7 m: cần đoán trước.
+ * Dùng chung cho luật (Match) và cho gợi ý thanh lực vàng trên màn hình (client).
+ */
+export function shouldJumpSmash(p: Player, shuttlePos: THREE.Vector3, shuttleVel: THREE.Vector3): boolean {
+  if (!p.canJump) return false;
+  if (shuttleAfter(shuttlePos, shuttleVel, SWING.impact).y <= CONTACT.maxY) return false; // đứng cũng với tới
+  const at = shuttleAfter(shuttlePos, shuttleVel, JUMP.impact);
+  // Lúc lên đỉnh cầu phải ở khoảng 2.6..3.4 m: thấp hơn thì nhảy cũng vô ích, cao hơn thì không với tới
+  if (at.y < CONTACT.maxY - 0.3 || at.y > CONTACT.maxY + JUMP.height) return false;
+  if (Math.sign(at.z) !== sideSign(p.side)) return false;
+  // Trên không vẫn giữ đà chạy, nên tính chỗ người sẽ ở lúc lên đỉnh
+  const body = p.pos.clone().addScaledVector(p.vel, JUMP.impact);
+  return Math.hypot(at.x - body.x, at.z - body.z) <= p.maxReach;
+}
 
   /**
  * Giới hạn người chơi trong phần sân của mình (cho phép ra ngoài biên 1 chút).
@@ -90,43 +116,58 @@ export class Match {
 
   /**
    * Thực hiện cú đánh.
-   * - power (0..1) quyết định tốc độ cầu -> quyết định cầu bay xa/nhanh tới đâu.
+   * - Đập (smash): power quyết định TỐC ĐỘ cầu, cắm thẳng xuống điểm nhắm.
+   *   Cầu thấp hơn SMASH_MIN_HEIGHT thì không đập được, tự đổi thành đánh ngang (drive).
+   * - Các cú khác: power quyết định ĐỘ SÂU điểm rơi (xem DEPTH_RANGE), đứng đâu cũng như nhau.
+   *   Game tự tính vận tốc để cầu rơi đúng chỗ đó (tự nâng góc nếu sẽ chạm lưới).
    * - quality (0..1) là độ chuẩn của điểm tiếp xúc: 1 = trúng tâm vợt đúng thời điểm.
-   *   Đánh lệch thì mất lực (tốc độ còn 50%..100%) và lệch hướng (tối đa 20 độ ngang, 15 độ dọc).
+   *   Đánh lệch thì hụt lực và lệch hướng (tối đa 20 độ ngang, 15 độ dọc).
    * Sau đó để vật lý quyết định: cầu có qua lưới không, có ra ngoài không.
    */
   private hit(p: Player, sw: Swing, quality: number, stretched = false): void {
-    const target = aimPoint(p.side, sw.shot, sw.aim, this.serveRight);
-    let dir = launchDirection(this.shuttlePos, sw.shot, target);
+    const shot: ShotType = sw.shot === 'smash' && this.shuttlePos.y < SMASH_MIN_HEIGHT ? 'drive' : sw.shot;
+    const target = aimPoint(p.side, shot, sw.aim, this.serveRight, sw.power);
 
     const rnd = THREE.MathUtils.randFloatSpread;
     let yawErr = rnd(2 * p.config.aimErrorDeg);
     // Đập trên 75% lực thì kém chính xác hơn, tối đa thêm 6 độ ở 100%
-    if (sw.shot === 'smash' && sw.power > 0.75) yawErr += rnd(2 * 6 * (sw.power - 0.75) / 0.25);
+    if (shot === 'smash' && sw.power > 0.75) yawErr += rnd(2 * 6 * (sw.power - 0.75) / 0.25);
     // Đánh lệch tâm vợt
     const miss = 1 - quality;
     yawErr += (Math.random() < 0.5 ? -1 : 1) * miss * 20;
     const pitchErr = rnd(2 * miss * 15);
-    dir = deflect(dir, yawErr, pitchErr);
 
-    const speed = speedForPower(sw.shot, sw.power) * (0.5 + 0.5 * quality);
+    let dir: THREE.Vector3;
+    let speed: number;
+    if (shot === 'smash') {
+      dir = launchDirection(this.shuttlePos, shot, target);
+      speed = smashSpeed(sw.power) * (0.5 + 0.5 * quality) * (sw.jump ? JUMP.speedBonus : 1);
+    } else {
+      // Tính đúng vận tốc để cầu rơi vào điểm nhắm. Lệch vợt thì hụt tối đa 25% tốc độ -> cầu ngắn lại
+      const v = solveShot(this.shuttlePos, target, SHOT_SPEC[shot].pitch ?? 0);
+      speed = v.length() * (0.75 + 0.25 * quality);
+      dir = v.normalize();
+    }
+    dir = deflect(dir, yawErr, pitchErr);
     const velIn = this.shuttleVel.clone();
     this.shuttleVel.copy(dir.multiplyScalar(speed));
     p.spend(STAMINA.hitBase + STAMINA.hitPower * sw.power * sw.power);
     p.swing = null;
 
     this.lastHitter = p.side;
-    this.isServeShot = isServe(sw.shot);
+    this.isServeShot = isServe(shot);
     this.rallyShots++;
     this.phase = 'rally';
     const names: Record<ShotType, string> = {
       clear: 'phông cầu', smash: 'đập cầu', drop: 'bỏ nhỏ', serveLong: 'giao cao sâu', serveShort: 'giao ngắn',
+      drive: 'đánh ngang (cầu thấp, không đập được)',
     };
     const who = this.names[p.side];
     const q = quality >= 0.85 ? 'chuẩn' : quality >= 0.6 ? 'hơi lệch' : 'lệch vợt';
-    this.message = `${who}: ${names[sw.shot]}${stretched ? ' (vươn tay)' : ''} ${Math.round(sw.power * 100)}% lực, ${q} (${speed.toFixed(0)} m/s)`;
+    const label = sw.jump && shot === 'smash' ? 'NHẢY ĐẬP' : names[shot];
+    this.message = `${who}: ${label}${stretched ? ' (vươn tay)' : ''} ${Math.round(sw.power * 100)}% lực, ${q} (${speed.toFixed(0)} m/s)`;
     this.emit({
-      type: 'hit', hitter: p.side, shot: sw.shot, power: sw.power, quality, stretched,
+      type: 'hit', hitter: p.side, shot, power: sw.power, quality, stretched, jump: !!sw.jump,
       contact: this.shuttlePos.clone(), velIn, velOut: this.shuttleVel.clone(), target,
     });
   }
@@ -141,7 +182,7 @@ export class Match {
     const sw = p.swing;
     if (!sw || this.lastHitter === p.side) return;
     if (Math.sign(this.shuttlePos.z) !== sideSign(p.side)) return; // chưa qua lưới thì không được đánh
-    const dt = sw.t - SWING.impact;
+    const dt = sw.t - swingImpact(sw);
     const incomingSpeed = this.shuttleVel.length();
     const window = swingWindow(incomingSpeed);
     if (Math.abs(dt) > window || !p.inContactZone(this.shuttlePos)) return;
@@ -252,7 +293,14 @@ export class Match {
 
       if (this.phase !== 'rally') { p.cancelCharge(); continue; }
       const charge = intent.charge && !isServe(intent.charge) ? intent.charge : null;
-      p.updateCharge(charge, intent.aim, dt);
+      const sw = p.updateCharge(charge, intent.aim, dt);
+      // Nhả phím đập mà cầu cao quá tầm với -> tự bật nhảy (nhảy đập)
+      if (sw && sw.shot === 'smash' && shouldJumpSmash(p, this.shuttlePos, this.shuttleVel)) {
+        sw.jump = true;
+        p.startJump();
+      }
+      // Gợi ý trên màn hình: đang giữ K và nhả ngay lúc này thì sẽ nhảy đập
+      p.jumpReady = p.chargingShot === 'smash' && shouldJumpSmash(p, this.shuttlePos, this.shuttleVel);
       this.tryContact(p);
     }
 

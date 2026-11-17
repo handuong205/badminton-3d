@@ -6,7 +6,7 @@ import { FIXED_DT } from '@badminton/shared/physics';
 import { Player } from '@badminton/shared/player';
 import { ROOM_NAME, SERVER_PORT, type WelcomeMsg } from '@badminton/shared/protocol';
 import { RallyLogger } from '@badminton/shared/rallyLogger';
-import { RuleBasedAI } from './ai/ruleBasedAI';
+import { DIFFICULTIES, RuleBasedAI, type DifficultyName } from './ai/ruleBasedAI';
 import { downloadText } from './data/download';
 import { HumanController } from './input/humanController';
 import { Keyboard } from './input/keyboard';
@@ -66,7 +66,9 @@ function runLoop(step: () => void, frame: (frameDt: number) => void): void {
 }
 
 // ===== Chơi với máy (như bước 2) =====
-function startOffline(): void {
+const DIFF_LABEL: Record<DifficultyName, string> = { easy: 'Dễ', normal: 'Thường', hard: 'Khó' };
+
+function startOffline(difficulty: DifficultyName): void {
   const human = new Player('near', false, { aimErrorDeg: 2 });
   const ai = new Player('far', true, { aimErrorDeg: 3 });
   const match = new Match(human, ai);
@@ -74,7 +76,8 @@ function startOffline(): void {
   // Thêm ?demo vào URL để xem 2 AI tự đấu
   const demo = new URLSearchParams(location.search).has('demo');
   human.controller = demo ? new RuleBasedAI(human, match) : new HumanController(kb);
-  ai.controller = new RuleBasedAI(ai, match);
+  ai.controller = new RuleBasedAI(ai, match, DIFFICULTIES[difficulty]);
+  if (!demo) match.names.far = `Máy (${DIFF_LABEL[difficulty]})`;
   const logger = new RallyLogger(match);
   const view = new GameView(match, 'near');
 
@@ -167,7 +170,7 @@ async function main(): Promise<void> {
 
   for (;;) {
     const choice = await menu.choose();
-    if (choice.mode === 'ai') { menu.hide(); startOffline(); return; }
+    if (choice.mode === 'ai') { menu.hide(); startOffline(choice.difficulty); return; }
     // Chờ server dậy. Quá 2 giây thì báo cho người chơi biết vì sao phải chờ
     const ready = await Promise.race([awake, new Promise<null>((r) => setTimeout(() => r(null), 2000))]);
     if (ready === null || ready === false) {

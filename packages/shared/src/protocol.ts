@@ -36,6 +36,8 @@ export interface PlayerSnap {
   charging: boolean;        // đang giữ phím (đối thủ thấy vợt sáng, nhưng không biết lực bao nhiêu)
   swingShot: ShotType | null;
   swingT: number;           // thời gian từ lúc bắt đầu vung (giây), dùng cho hoạt ảnh
+  jumpT: number;            // thời gian đã ở trên không (-1 = đứng dưới đất)
+  landLock: number;         // còn bị khựng sau khi tiếp đất (giây)
 }
 
 /** 'snap': ảnh chụp trạng thái trận, gửi cho cả phòng SNAPSHOT_HZ lần/giây */
@@ -69,6 +71,7 @@ export function playerSnap(p: Player, name: string, connected: boolean): PlayerS
   return {
     name, connected, pos: vec(p.pos), vel: vec(p.vel), charging: p.chargingShot !== null,
     swingShot: p.swing?.shot ?? null, swingT: p.swing?.t ?? 0,
+    jumpT: r3(p.jumpT), landLock: r3(p.landLock),
   };
 }
 

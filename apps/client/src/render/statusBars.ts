@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { STAMINA, type Player } from '@badminton/shared/player';
+import { STAMINA, staminaPowerCap, type Player } from '@badminton/shared/player';
 import { sideSign } from '@badminton/shared/types';
 
 const W = 0.9;   // chiều dài thanh (m)
@@ -61,6 +61,7 @@ export class StatusBars {
     const st = p.stamina / STAMINA.max;
     this.stamina.set(st, 1, p.stamina < STAMINA.minForSprint ? 0xf44336 : 0x4caf50);
     this.power.group.visible = p.chargingShot !== null;
-    this.power.set(p.chargePower, st);
+    // Thanh lực chuyển vàng = nhả ngay lúc này sẽ tự bật nhảy đập
+    this.power.set(p.chargePower, staminaPowerCap(p.stamina), p.jumpReady ? 0xffd54f : 0xff9800);
   }
 }

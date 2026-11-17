@@ -1,9 +1,9 @@
 import * as THREE from 'three';
 import type { Match } from '@badminton/shared/match';
-import { CHARGE_TIME, CONTACT, MOVE, STAMINA, SWING, type Controller, type Player } from '@badminton/shared/player';
-import { predictTrajectory, solveLaunch } from '@badminton/shared/physics';
+import { CHARGE_TIME, CONTACT, JUMP, MOVE, SWING, staminaPowerCap, type Controller, type Player } from '@badminton/shared/player';
+import { predictTrajectory } from '@badminton/shared/physics';
 import { HALF_LEN, SINGLES_HALF_W } from '@badminton/shared/rules';
-import { SHOT_SPEC, aimPoint, powerForSpeed } from '@badminton/shared/shots';
+import { SHOT_SPEC, powerForDepth } from '@badminton/shared/shots';
 import type { Aim, Intent, ShotType } from '@badminton/shared/types';
 import { other, sideSign } from '@badminton/shared/types';
 
@@ -15,11 +15,39 @@ export interface AIDifficulty {
   smashChance: number;      // xác suất đập khi có cơ hội
   smashPower: [number, number];  // khoảng lực khi đập 
   leaveOutMargin: number; // cầu dự đoán ra ngoài quá mức này (m) thì bỏ, không đỡ
+  longServeChance: number; // xác suất giao cao sâu (còn lại là giao ngắn)
+  aimAwayChance: number;   // xác suất đánh về phía xa đối thủ (còn lại đánh vào giữa)
+  jumpChance: number;      // xác suất chọn nhảy đập
 }
 
-export const NORMAL: AIDifficulty = {
-  reactionTime: 0.22, replanEvery: 0.1, timingNoise: 0.035, powerNoise: 0.05, smashChance: 0.45, smashPower: [0.45, 0.7], leaveOutMargin: 0.15,
+export type DifficultyName = 'easy' | 'normal' | 'hard';
+
+/**
+ * 3 mức độ khó. AI vẫn dùng chung luật với người (nạp lực, canh giờ, thể lực),
+ * chỉ khác ở phản xạ, độ chính xác và cách chọn cú.
+ * - Dễ: phản xạ chậm, canh giờ kém (hay đánh lệch vợt, vụt trượt), hiếm khi đập và đập nhẹ,
+ *   hay giao ngắn, hay đánh vào giữa sân. Hợp để làm quen điều khiển.
+ * - Thường: như bản cũ.
+ * - Khó: phản xạ nhanh, chính xác, đập nhiều và mạnh, luôn đánh về chỗ trống.
+ */
+export const DIFFICULTIES: Record<DifficultyName, AIDifficulty> = {
+  easy: {
+    reactionTime: 0.4, replanEvery: 0.15, timingNoise: 0.06, powerNoise: 0.1, smashChance: 0.12, smashPower: [0.15, 0.35],
+    leaveOutMargin: 0.4, longServeChance: 0.2, aimAwayChance: 0.4,
+    jumpChance: 0
+  },
+  normal: {
+    reactionTime: 0.22, replanEvery: 0.1, timingNoise: 0.035, powerNoise: 0.05, smashChance: 0.45, smashPower: [0.45, 0.7],
+    leaveOutMargin: 0.15, longServeChance: 0.5, aimAwayChance: 0.75,
+    jumpChance: 0.2
+  },
+  hard: {
+    reactionTime: 0.15, replanEvery: 0.08, timingNoise: 0.025, powerNoise: 0.035, smashChance: 0.6, smashPower: [0.55, 0.85],
+    leaveOutMargin: 0.1, longServeChance: 0.5, aimAwayChance: 0.9,
+    jumpChance: 0.5
+  },
 };
+export const NORMAL = DIFFICULTIES.normal;
 
 /** Số ngẫu nhiên phân phối chuẩn (Box-Muller) */
 function gauss(std: number): number {
@@ -34,6 +62,7 @@ interface Plan {
   shot: ShotType;
   aim: Aim;
   power: number;           // lực muốn dùng
+  jump: boolean;
 }
 
 /**
@@ -56,6 +85,7 @@ export class RuleBasedAI implements Controller {
   private readonly me: Player;
   private readonly match: Match;
   private readonly diff: AIDifficulty;
+  private wantJump = false;
 
   constructor(me: Player, match: Match, diff: AIDifficulty = NORMAL) {
     this.me = me;
@@ -79,6 +109,7 @@ export class RuleBasedAI implements Controller {
     if (m.rallyShots !== this.lastShotCount) {
       this.lastShotCount = m.rallyShots;
       if (m.lastHitter !== this.me.side) this.seenHitAt = m.time;
+      this.wantJump = Math.random() < this.diff.jumpChance;
       this.plan = null;
       this.swung = false;
     }
@@ -93,7 +124,9 @@ export class RuleBasedAI implements Controller {
       this.plan = this.planIntercept();
       // Sai số canh giờ chỉ bốc thăm 1 lần cho mỗi quả cầu
       if (this.plan && (!old || Math.abs(old.impactAt - this.plan.impactAt) > 0.15)) {
-        this.releaseAt = this.plan.impactAt - SWING.impact + gauss(this.diff.timingNoise);
+        // Tính thời điểm nhả phím dựa trên cú đánh
+        const impact = this.plan.jump ? JUMP.impact : SWING.impact;
+        this.releaseAt = this.plan.impactAt - impact + gauss(this.diff.timingNoise);
       } else if (this.plan && old) {
         this.releaseAt += this.plan.impactAt - old.impactAt;
       }
@@ -140,8 +173,8 @@ export class RuleBasedAI implements Controller {
     this.serveDelay -= dt;
     if (this.serveDelay > 0) return intent;
     if (!this.serveShot) {
-      this.serveShot = Math.random() < 0.5 ? 'serveShort' : 'serveLong';
-      this.servePower = this.powerFor(this.serveShot, 0, m.shuttlePos);
+      this.serveShot = Math.random() < this.diff.longServeChance ? 'serveLong' : 'serveShort';
+      this.servePower = this.powerFor(this.serveShot);
     }
     if (this.me.chargingShot && this.me.chargePower >= this.servePower) {
       this.serveDelay = 1.0;
@@ -151,20 +184,15 @@ export class RuleBasedAI implements Controller {
     return intent;
   }
 
-  /** Lực cần để cú `shot` rơi đúng điểm nhắm (có sai số powerNoise), không vượt quá thể lực */
-  private powerFor(shot: ShotType, aim: Aim, contact: THREE.Vector3): number {
-    const m = this.match;
-    let p: number;
-    if (shot === 'smash') {
-      p = THREE.MathUtils.randFloat(this.diff.smashPower[0], this.diff.smashPower[1]);
-    } else {
-      const target = aimPoint(this.me.side, shot, aim, m.serveRight);
-      const v = solveLaunch(contact, target, SHOT_SPEC[shot].pitch ?? 0).length();
-      p = powerForSpeed(shot, v);
-    }
-    // Bỏ nhỏ cần lực nhẹ và rất nhạy (lệch 5% là chạm lưới) nên AI cẩn thận hơn ở cú này
-    p += gauss(this.diff.powerNoise * (shot === 'drop' ? 0.4 : 1));
-    return THREE.MathUtils.clamp(p, 0.05, Math.min(1, this.me.stamina / STAMINA.max));
+  /**
+   * Lực cho cú `shot` (có sai số powerNoise), không vượt quá giới hạn thể lực.
+   * Lực = độ sâu nên không cần biết đứng ở đâu: muốn rơi ở độ sâu mặc định của cú thì cần bao nhiêu lực.
+   */
+  private powerFor(shot: ShotType): number {
+    const p = shot === 'smash'
+      ? THREE.MathUtils.randFloat(this.diff.smashPower[0], this.diff.smashPower[1])
+      : powerForDepth(shot, SHOT_SPEC[shot].depth);
+    return THREE.MathUtils.clamp(p + gauss(this.diff.powerNoise), 0.05, staminaPowerCap(this.me.stamina));
   }
 
   /**
@@ -180,7 +208,21 @@ export class RuleBasedAI implements Controller {
     const margin = this.diff.leaveOutMargin;
     const clearlyOut = Math.abs(landing.x) > SINGLES_HALF_W + margin || Math.abs(landing.z) > HALF_LEN + margin;
     if (!m.isServeShot && clearlyOut && Math.sign(landing.z) === s) return null;
-
+    // Nhảy đập: đón cầu sớm ở điểm cao hơn tầm với khi đứng, chỉ khi cầu ở giữa sân và còn sức
+    if (this.wantJump && this.me.stamina >= JUMP.minStamina + 10) {
+      for (const pt of traj) {
+        const p = pt.pos;
+        if (Math.sign(p.z) !== s || pt.vel.y > 0 || Math.abs(p.z) > 4.8) continue;
+        if (p.y <= CONTACT.maxY + 0.05 || p.y > CONTACT.maxY + JUMP.height - 0.05) continue;
+        const stand = this.standFor(p);
+        if (this.me.pos.distanceTo(stand) / MOVE.sprint > pt.t - JUMP.impact - 0.05) continue; // không kịp tới
+        const contact = p.clone();
+        return {
+          contact, stand, impactAt: m.time + pt.t, shot: 'smash', aim: this.chooseAim(),
+          power: this.powerFor('smash'), jump: true,
+        };
+      }
+    }
     let chosen = null;
     for (const pt of traj) {
       const p = pt.pos;
@@ -194,9 +236,9 @@ export class RuleBasedAI implements Controller {
     const contact = chosen.pos.clone();
     const shot = this.chooseShot(contact);
     const aim = this.chooseAim();
-    return {
+        return {
       contact, stand: this.standFor(contact), impactAt: m.time + chosen.t,
-      shot, aim, power: this.powerFor(shot, aim, contact),
+      shot, aim, power: this.powerFor(shot), jump: false,
     };
   }
 
@@ -226,7 +268,7 @@ export class RuleBasedAI implements Controller {
   /** Đánh về phía xa đối thủ. aim tính theo góc nhìn của chính mình */
   private chooseAim(): Aim {
     const opp = this.match.players[other(this.me.side)];
-    if (Math.random() < 0.25) return 0;
+    if (Math.random() >= this.diff.aimAwayChance) return 0;
     const myRightX = this.me.side === 'near' ? 1 : -1;
     return (opp.pos.x * myRightX > 0 ? -1 : 1) as Aim;
   }

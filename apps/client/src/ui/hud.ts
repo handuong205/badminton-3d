@@ -61,9 +61,6 @@ export class Hud {
               <div data-invite hidden class="pointer-events-auto mt-2 rounded-lg border border-emerald-400/30 bg-slate-900/80 p-2.5 text-xs text-white/70 shadow-lg shadow-black/40 backdrop-blur-md">
         <div class="mb-1">Gửi link này cho bạn để vào thẳng phòng:</div>
               </div>
-      <div data-extra hidden class="mt-2 rounded-lg border border-white/10 bg-slate-900/70 px-3 py-1.5 text-xs text-white/70 backdrop-blur-md"></div>
-      <div data-invite hidden class="pointer-events-auto mt-2 rounded-lg border border-emerald-400/30 bg-slate-900/80 p-2.5 text-xs text-white/70 shadow-lg shadow-black/40 backdrop-blur-md">
-        <div class="mb-1">Gửi link này cho bạn để vào thẳng phòng:</div>
         <div data-invite-url class="select-all break-all font-mono text-[11px] text-emerald-300"></div>
         <button data-invite-copy type="button" class="mt-2 w-full rounded-md bg-emerald-500 px-2 py-1 font-semibold text-white transition hover:bg-emerald-400">Copy link mời (C)</button>
       </div>`;
@@ -79,7 +76,7 @@ export class Hud {
         ${item(keys("Q", "E"), "Đánh trái / phải")}
         <div class="col-span-2 mt-1 border-t border-white/10 pt-1.5 text-[10px] uppercase tracking-wider text-white/40">Giữ để nạp lực · nhả để vung</div>
         ${item(keys("J"), "Phông cầu")}
-        ${item(keys("K"), "Đập cầu")}
+        ${item(keys("K"), "Đập cầu (thanh vàng: nhả = nhảy đập)")}
         ${item(keys("L"), "Bỏ nhỏ")}
         <div></div>
         <div data-help-line class="col-span-2 mt-1 border-t border-white/10 pt-1.5 text-white/60"></div>

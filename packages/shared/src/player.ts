@@ -35,6 +35,15 @@ export const STAMINA = {
   sprintKeepMin: 5,   // đang chạy nhanh thì được chạy tiếp tới khi còn 5
 };
 
+/**
+ * Lực tối đa được phép theo thể lực: còn từ 50 thể lực trở lên thì đánh được 100%,
+ * dưới đó giảm dần, hết sạch thể lực vẫn còn 50% lực.
+ * (Trước đây giới hạn = thể lực%, nhưng giờ lực = độ sâu nên giới hạn cứng quá làm người mệt không phông nổi qua giữa sân.)
+ */
+export function staminaPowerCap(stamina: number): number {
+  return Math.min(1, 0.5 + stamina / STAMINA.max);
+}
+
 // ===== Vung vợt =====
 export const CHARGE_TIME = 0.7;  // giữ 0.7 s thì đầy 100% lực
 export const SWING = {
@@ -42,6 +51,19 @@ export const SWING = {
   window: 0.07,  // cầu tới sớm/trễ tối đa 0.07 s vẫn chạm vợt
   windowMax: 0.12,   // với cầu nhanh (cú đập) cửa sổ nới dần tới 0.12 s
   cooldown: 0.45, // tính từ lúc nhả phím, trước khi được nạp lực lần sau
+};
+
+// ===== Nhảy đập =====
+// Không có phím riêng: nhả K (đập) mà cầu sẽ cao quá tầm với khi đứng (CONTACT.maxY) nhưng
+// vẫn với tới nếu bật nhảy, thì nhân vật TỰ nhảy. Vợt chạm cầu ở đỉnh cú nhảy.
+export const JUMP = {
+  height: 0.5,        // m, điểm chạm cao thêm tối đa (ở đỉnh)
+  airTime: 0.5,       // s, thời gian ở trên không
+  impact: 0.25,       // s, vợt tới điểm đánh lúc lên đỉnh (thay cho SWING.impact = 0.12 khi đứng)
+  speedBonus: 1.15,   // đập khi nhảy nhanh hơn 15%
+  staminaCost: 25,
+  minStamina: 30,     // dưới mức này không nhảy được
+  landingLock: 0.35,  // s, tiếp đất bị khựng, không di chuyển được
 };
 
 // ===== Vùng tiếp xúc (khoảng cách NGANG từ thân người tới cầu) =====
@@ -77,12 +99,17 @@ export function reboundPower(incomingSpeed: number): number {
   return THREE.MathUtils.clamp((incomingSpeed - 5) / 22, 0, 0.6);
 }
 
-/** Một lần vung vợt đang diễn ra */
 export interface Swing {
   shot: ShotType;
   power: number;  // 0..1
   aim: Aim;
   t: number;      // thời gian từ lúc nhả phím
+  jump?: boolean; // cú nhảy đập
+}
+
+/** Thời điểm vợt tới điểm đánh (tính từ lúc nhả phím): nhảy đập thì chậm hơn, đợi lên đỉnh */
+export function swingImpact(sw: Swing): number {
+  return sw.jump ? JUMP.impact : SWING.impact;
 }
 
 export class Player {
@@ -103,6 +130,12 @@ export class Player {
   private dashCd = 0;
   private sprintingNow = false; // đang chạy nhanh (để giữ trạng thái khi thể lực tụt dưới 20)
   private lungeTimer = 0;    // > 0: vừa bứt tốc, được với xa hơn
+  /** Thời gian đã ở trên không (giây); -1 = đang đứng dưới đất */
+  jumpT = -1;
+  /** > 0: vừa tiếp đất, còn bị khựng bao nhiêu giây */
+  landLock = 0;
+  /** Đang giữ K và nhả ngay thì sẽ nhảy đập (chỉ để vẽ gợi ý) */
+  jumpReady = false;
   private readonly dashDir = new THREE.Vector3();
 
   constructor(side: Side, isAI: boolean, config: PlayerConfig) {
@@ -114,10 +147,37 @@ export class Player {
 
   /** Lực hiện tại của thanh lực: theo thời gian giữ, nhưng không vượt quá % thể lực còn lại */
   get chargePower(): number {
-    return Math.min(this.chargeTime / CHARGE_TIME, 1, this.stamina / STAMINA.max);
+    return Math.min(this.chargeTime / CHARGE_TIME, staminaPowerCap(this.stamina));
   }
 
   get isDashing(): boolean { return this.dashTimer > 0; }
+  get isAirborne(): boolean { return this.jumpT >= 0; }
+
+  /** Độ cao đang nhảy (m): đường parabol, cao nhất ở giữa thời gian bay */
+  get jumpHeight(): number {
+    if (this.jumpT < 0) return 0;
+    const k = this.jumpT / JUMP.airTime;
+    return 4 * JUMP.height * k * (1 - k);
+  }
+
+  /** Có bật nhảy được không (đang đứng, không khựng, đủ thể lực) */
+  get canJump(): boolean {
+    return this.jumpT < 0 && this.landLock === 0 && this.stamina >= JUMP.minStamina;
+  }
+
+  /** Đếm giờ cú nhảy và thời gian khựng sau khi tiếp đất (client online cũng gọi để dự đoán) */
+  tickJump(dt: number): void {
+    this.landLock = Math.max(0, this.landLock - dt);
+    if (this.jumpT >= 0) {
+      this.jumpT += dt;
+      if (this.jumpT >= JUMP.airTime) { this.jumpT = -1; this.landLock = JUMP.landingLock; } // tiếp đất
+    }
+  }
+
+  startJump(): void {
+    this.jumpT = 0;
+    this.spend(JUMP.staminaCost);
+  }
   get isSprinting(): boolean { return this.sprintingNow; }
   spend(amount: number): void {
     this.stamina = Math.max(0, this.stamina - amount);
@@ -133,11 +193,12 @@ export class Player {
     this.cooldown = Math.max(0, this.cooldown - dt);
     this.dashCd = Math.max(0, this.dashCd - dt);
     this.lungeTimer = Math.max(0, this.lungeTimer - dt);
+    this.tickJump(dt);
     this.sinceSpend += dt;
     if (this.sinceSpend >= STAMINA.regenDelay) this.recover(STAMINA.regenPerSec * dt);
     if (this.swing) {
       this.swing.t += dt;
-      if (this.swing.t > SWING.impact + SWING.windowMax) { this.swing = null; return true; }
+        if (this.swing.t > swingImpact(this.swing) + SWING.windowMax) { this.swing = null; return true; }
     }
     return false;
   }
@@ -147,7 +208,9 @@ export class Player {
     const canBurst = this.stamina >= STAMINA.minForSprint;
     const dir = new THREE.Vector3(intent.moveX, 0, intent.moveZ);
     if (dir.lengthSq() > 1) dir.normalize();
-
+        // Trên không: giữ nguyên đà, không đổi hướng được. Vừa tiếp đất: khựng lại
+    if (this.landLock > 0) { this.vel.set(0, 0, 0); this.sprintingNow = false; return; }
+    if (this.isAirborne) { this.pos.addScaledVector(this.vel, dt); return; }
     // Bứt tốc: lao nhanh theo hướng đang bấm
     if (intent.dash && canBurst && this.dashCd === 0 && dir.lengthSq() > 0.01 && !this.isDashing) {
       this.dashDir.copy(dir).normalize();
@@ -176,7 +239,9 @@ export class Player {
     this.pos.addScaledVector(this.vel, dt);
   }
 
-   stop(): void { this.vel.set(0, 0, 0); this.dashTimer = 0; this.sprintingNow = false; }
+  stop(): void {
+    this.vel.set(0, 0, 0); this.dashTimer = 0; this.sprintingNow = false; this.jumpT = -1; this.landLock = 0;
+  }
 
   /**
    * Xử lý thanh lực. Giữ phím = nạp lực, nhả phím = bắt đầu vung.
@@ -214,7 +279,8 @@ export class Player {
 
   /** Cầu ở điểm p thì đánh được không, chuẩn tới đâu, tối đa bao nhiêu lực. null = ngoài tầm */
   reach(p: THREE.Vector3): Reach | null {
-    if (p.y < CONTACT.minY || p.y > CONTACT.maxY) return null;
+    const y = p.y - this.jumpHeight; // đang nhảy thì cả vùng với tới nâng lên theo
+    if (y < CONTACT.minY || y > CONTACT.maxY) return null;
     const d = this.horizDist(p);
     const max = this.maxReach;
     if (d < CONTACT.minDist || d > max) return null;

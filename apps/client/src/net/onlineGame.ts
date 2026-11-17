@@ -1,8 +1,8 @@
 import * as THREE from 'three';
 import type { Room } from '@colyseus/sdk';
-import { Match, keepInOwnHalf } from '@badminton/shared/match';
+import { Match, keepInOwnHalf, shouldJumpSmash } from '@badminton/shared/match';
+import { Player, SWING, swingImpact } from '@badminton/shared/player';
 import { FIXED_DT, stepShuttle } from '@badminton/shared/physics';
-import { Player, SWING } from '@badminton/shared/player';
 import type { InputMsg, PrivateSnap, RoomStatus, Snapshot } from '@badminton/shared/protocol';
 import { NET_H } from '@badminton/shared/rules';
 import { isServe } from '@badminton/shared/shots';
@@ -51,6 +51,7 @@ export class OnlineGame {
   private seq = 0;
   private lastSentJson = '';
   private sinceSend = 0;
+  private localJumpAt = -1;            // lúc client tự dự đoán bật nhảy (để không bị ảnh chụp cũ hủy mất)
     /** Vị trí + vận tốc quả cầu (chưa làm mượt) ở khung hình trước, và độ lệch đang được giảm dần về 0 */
   private prevShuttle: { pos: THREE.Vector3; vel: THREE.Vector3 } | null = null;
   private readonly shuttleOffset = new THREE.Vector3();
@@ -92,17 +93,38 @@ export class OnlineGame {
     else if (s.phase === 'rally' && intent.charge && !isServe(intent.charge)) charge = intent.charge;
     const me = this.me;
     if (charge && !me.swing) {
-      if (!me.chargingShot) me.chargeTime = 0; else me.chargeTime += dt;
+      if (!me.chargingShot) me.chargeTime = 0;
+      else me.chargeTime += dt;
       me.chargingShot = charge;
       me.chargeAim = intent.aim;
     } else if (!charge && me.chargingShot) {
-      me.swing = { shot: me.chargingShot, power: me.chargePower, aim: intent.aim, t: 0 };
+      me.swing = {
+        shot: me.chargingShot,
+        power: me.chargePower,
+        aim: intent.aim,
+        t: 0,
+      };
+      // Dự đoán nhảy đập giống luật trên server (cầu đã được ngoại suy tới lúc server nhận phím).
+      // Không trừ thể lực ở đây: thể lực luôn lấy theo server
+      if (
+        me.swing.shot === "smash" &&
+        shouldJumpSmash(me, this.match.shuttlePos, this.match.shuttleVel)
+      ) {
+        me.swing.jump = true;
+        me.jumpT = 0;
+        this.localJumpAt = this.clock;
+      }
       me.chargingShot = null;
     }
+    // Gợi ý thanh lực vàng: nhả ngay thì nhảy đập
+    me.jumpReady =
+      me.chargingShot === "smash" &&
+      shouldJumpSmash(me, this.match.shuttlePos, this.match.shuttleVel);
     if (me.swing) {
       me.swing.t += dt;
-      if (me.swing.t > SWING.impact + SWING.windowMax) me.swing = null;
+      if (me.swing.t > swingImpact(me.swing) + SWING.windowMax) me.swing = null;
     }
+    me.tickJump(dt);
 
     // Dự đoán di chuyển: lúc giao cầu server không cho ai di chuyển, nên client cũng vậy
     if (s.phase !== 'serve' && s.phase !== 'matchOver') {
@@ -162,9 +184,11 @@ export class OnlineGame {
       me.pos.copy(serverPos);
       me.vel.set(...sp.vel);
       me.chargingShot = s.phase === 'serve' && sp.charging ? me.chargingShot : null;
+
       this.history = [];
       return;
     }
+    this.syncJump(me, sp.jumpT, sp.landLock);
     // Trạng thái server tại s.t được tạo từ phím mình gửi ở thời điểm (client) s.t - offset - rtt/2
     const sentAt = s.t - (this.offset ?? 0) - this.rtt / 2;
     const h = this.history.find((e) => e.t >= sentAt) ?? this.history[this.history.length - 1];
@@ -181,6 +205,17 @@ export class OnlineGame {
     const fix = err.multiplyScalar(0.3);
     me.pos.add(fix);
     for (const e of this.history) if (e.t >= h.t) e.pos.add(fix);
+  }
+
+  /**
+   * Lấy trạng thái nhảy của mình theo server. Ảnh chụp đã cũ ~nửa vòng khứ hồi nên cộng thêm phần đó.
+   * Nếu vừa tự dự đoán bật nhảy mà ảnh chụp (gửi trước khi server nhận phím) chưa thấy nhảy thì giữ dự đoán.
+   */
+  private syncJump(me: Player, jumpT: number, landLock: number): void {
+    const age = this.rtt / 2;
+    if (jumpT >= 0) me.jumpT = Math.min(jumpT + age, 0.499);
+    else if (this.clock - this.localJumpAt > this.rtt + 0.15) me.jumpT = -1;
+    me.landLock = Math.max(0, landLock - age);
   }
 
   // ===== Mỗi khung hình: chuẩn bị dữ liệu để vẽ =====
@@ -208,6 +243,8 @@ export class OnlineGame {
     p.chargingShot = src.charging ? 'clear' : null; // chỉ để vợt sáng lên, không lộ loại cú
     p.chargeTime = 0;
     p.swing = src.swingShot ? { shot: src.swingShot, power: 0, aim: 0, t: src.swingT } : null;
+    // Đối thủ bật nhảy: thấy được (để biết đường đỡ), nhưng vẫn không biết lực
+    p.jumpT = pa.jumpT >= 0 && pb.jumpT >= 0 ? THREE.MathUtils.lerp(pa.jumpT, pb.jumpT, k) : src.jumpT;
   }
 
   /**
@@ -258,7 +295,7 @@ export class OnlineGame {
     m.shuttlePos.add(this.shuttleOffset);
     m.shuttlePos.y = Math.max(0, m.shuttlePos.y);
   }
-  
+
   /** Dòng thông báo theo góc nhìn của mình (server viết theo tên người chơi) */
   get localMessage(): string | null {
     const s = this.latest;

@@ -1,13 +1,20 @@
 import { useState, type FormEvent } from 'react';
 import { NAME_MAX } from '@badminton/shared/protocol';
+import type { DifficultyName } from '../ai/ruleBasedAI';
 
 /** Lựa chọn của người chơi ở màn hình đầu */
 export type MenuChoice =
-  | { mode: 'ai' }
+  | { mode: 'ai'; difficulty: DifficultyName }
   | { mode: 'create'; name: string }
   | { mode: 'join'; name: string; code: string };
 
 const NAME_KEY = 'badminton.name';
+const DIFF_KEY = 'badminton.difficulty';
+const DIFFS: { id: DifficultyName; label: string }[] = [
+  { id: 'easy', label: 'Dễ' },
+  { id: 'normal', label: 'Thường' },
+  { id: 'hard', label: 'Khó' },
+];
 const CODE_LEN = 6;
 
 function load(key: string): string {
@@ -37,6 +44,12 @@ export function MenuScreen({ error, busy, busyText, onChoose }: Props) {
   const [name, setName] = useState(() => load(NAME_KEY));
   const [code, setCode] = useState(() => onlyDigits(new URLSearchParams(location.search).get('room') ?? ''));
   const [localError, setLocalError] = useState('');
+
+    // Lần đầu chơi mặc định mức Dễ; sau đó nhớ mức đã chọn
+  const [difficulty, setDifficulty] = useState<DifficultyName>(() => {
+    const d = load(DIFF_KEY);
+    return DIFFS.some((x) => x.id === d) ? (d as DifficultyName) : 'easy';
+  });
 
   /** Online bắt buộc có tên. Trả về tên đã làm sạch, hoặc null nếu chưa nhập */
   const onlineName = (): string | null => {
@@ -94,7 +107,7 @@ export function MenuScreen({ error, busy, busyText, onChoose }: Props) {
             <button
               type="button"
               disabled={busy}
-              onClick={() => { save(NAME_KEY, name.trim()); onChoose({ mode: 'ai' }); }}
+              onClick={() => { save(NAME_KEY, name.trim()); save(DIFF_KEY, difficulty); onChoose({ mode: 'ai', difficulty }); }}
               className="group mt-5 flex w-full items-center gap-4 rounded-2xl bg-gradient-to-r from-sky-500 to-indigo-500 p-4 text-left shadow-lg shadow-sky-950/50 transition hover:brightness-110 active:scale-[0.99] disabled:cursor-wait disabled:opacity-50"
             >
               <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-white/15 text-2xl">🤖</span>
@@ -104,6 +117,28 @@ export function MenuScreen({ error, busy, busyText, onChoose }: Props) {
               </span>
               <span className="text-xl transition group-hover:translate-x-1">→</span>
             </button>
+
+            {/* ===== Độ khó của máy ===== */}
+            <div className="mt-3 flex items-center gap-3">
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-white/45">Độ khó</span>
+              <div className="grid flex-1 grid-cols-3 gap-1 rounded-xl bg-white/5 p-1" role="radiogroup" aria-label="Độ khó của máy">
+                {DIFFS.map((d) => (
+                  <button
+                    key={d.id}
+                    type="button"
+                    role="radio"
+                    aria-checked={difficulty === d.id}
+                    disabled={busy}
+                    onClick={() => setDifficulty(d.id)}
+                    className={`rounded-lg py-1.5 text-sm font-semibold transition disabled:opacity-50 ${
+                      difficulty === d.id ? 'bg-sky-500 text-white shadow' : 'text-white/60 hover:bg-white/10 hover:text-white'
+                    }`}
+                  >
+                    {d.label}
+                  </button>
+                ))}
+              </div>
+            </div>
 
             {/* ===== Online ===== */}
             <div className="my-6 flex items-center gap-3 text-[11px] font-semibold uppercase tracking-[0.2em] text-white/35">
