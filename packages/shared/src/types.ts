@@ -3,7 +3,11 @@
 /** near = phía người chơi (z > 0), far = phía bên kia lưới (z < 0) */
 export type Side = 'near' | 'far';
 
-export type ShotType = 'clear' | 'smash' | 'drop' | 'serveLong' | 'serveShort';
+/**
+ * Loại cú đánh. 'drive' (đánh ngang) không có phím riêng: bấm K (đập) khi cầu đã xuống thấp
+ * hơn SMASH_MIN_HEIGHT thì thành drive, vì cầu thấp thì không thể đập cắm xuống được.
+ */
+export type ShotType = 'clear' | 'smash' | 'drop' | 'serveLong' | 'serveShort' | 'drive';
 
 /** Hướng đánh sang trái/giữa/phải, tính theo góc nhìn của người đánh */
 export type Aim = -1 | 0 | 1;

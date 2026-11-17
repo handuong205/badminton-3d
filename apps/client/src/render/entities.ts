@@ -163,7 +163,7 @@ export class PlayerView {
 
   sync(dt: number, shuttle: THREE.Vector3): void {
     const p = this.player;
-    this.group.position.set(p.pos.x, 0, p.pos.z);
+    this.group.position.set(p.pos.x, p.jumpHeight, p.pos.z); // nhảy đập: cả người bật lên
 
     // Hướng nhìn: đang chạy thì quay theo hướng chạy, còn lại (đứng, nạp lực, vung) thì nhìn về lưới
     const speed = Math.hypot(p.vel.x, p.vel.z);

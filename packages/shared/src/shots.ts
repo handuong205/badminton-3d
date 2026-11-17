@@ -5,38 +5,71 @@ import { other, sideSign } from './types';
 
 /**
  * Thông số mỗi loại cú đánh.
- * - speed: tốc độ cầu (m/s) ở lực 0% và 100%, tốc độ thực = nội suy tuyến tính theo lực.
- *   Các số này được chỉnh bằng mô phỏng: phông cầu từ cuối sân (cao 2.4 m, cách lưới 5.5 m)
- *   với lực 70% rơi cách lưới 5.8 m, 90% rơi 6.6 m, 95% trở lên ra ngoài biên cuối (6.7 m).
- *   Đánh từ gần lưới thì cùng mức lực sẽ bay xa hơn, giống ngoài đời.
  * - pitch: góc bắn (độ). Đập cầu không có góc cố định mà nhắm thẳng xuống điểm rơi.
- * - depth: điểm nhắm, tính từ lưới (m), chỉ dùng để xác định HƯỚNG đánh trái/phải.
+ * - depth: độ sâu "mặc định" của cú (m tính từ lưới): AI nhắm tới đây, và dùng để tính hướng trái/phải.
  */
-export const SHOT_SPEC: Record<ShotType, { speed: [number, number]; pitch: number | null; depth: number }> = {
-  clear:      { speed: [3.2, 68.9], pitch: 40,   depth: 6.2 },
-  drop:       { speed: [3.0, 34.0], pitch: 15,   depth: 2.2 },
-  smash:      { speed: [30, 90],    pitch: null, depth: 3.5 },
-  serveLong:  { speed: [-2.7, 60.7], pitch: 50,  depth: 6.2 },
-  serveShort: { speed: [5.9, 21.5], pitch: 25,   depth: 2.4 },
+export const SHOT_SPEC: Record<ShotType, { pitch: number | null; depth: number }> = {
+  clear:      { pitch: 40,   depth: 6.2 },
+  drop:       { pitch: 15,   depth: 2.2 },
+  smash:      { pitch: null, depth: 3.5 },
+  serveLong:  { pitch: 50,   depth: 6.2 },
+  serveShort: { pitch: 25,   depth: 2.4 },
+  drive:      { pitch: 8,    depth: 4.5 },
+};
+
+/** Đập: lực quyết định TỐC ĐỘ cầu (m/s) ở 0% và 100% lực */
+export const SMASH_SPEED: [number, number] = [30, 90];
+
+/** Cầu thấp hơn mức này (m) thì bấm đập sẽ thành đánh ngang (drive): lưới cao 1.55 m, không thể cắm xuống */
+export const SMASH_MIN_HEIGHT = 1.8;
+
+/**
+ * LỰC = ĐỘ SÂU (mọi cú trừ đập): lực 0% và 100% ứng với điểm rơi cách lưới bao nhiêu mét.
+ * Đứng ở đâu trên sân cũng vậy, nên người chơi chỉ cần nhớ "phông 70% là rơi giữa-cuối sân".
+ * Biên cuối cách lưới 6.7 m, vạch giao cầu ngắn 1.98 m.
+ * - clear:      50% -> 4.5 m, 70% -> 5.5 m, 90% -> 6.5 m, từ ~94% trở lên ra ngoài
+ * - drop:       30% -> 1.4 m (sát lưới), 100% -> 3.4 m
+ * - serveLong:  80% -> 6.2 m, từ ~93% trở lên ra ngoài
+ * - serveShort: dưới ~24% là không qua vạch giao cầu ngắn (giao hỏng)
+ * - drive:      cầu thấp đánh ngang, 50% -> 4.8 m, 100% -> 6.5 m
+ */
+export const DEPTH_RANGE: Record<Exclude<ShotType, 'smash'>, [number, number]> = {
+  clear:      [2.0, 7.0],
+  drop:       [0.6, 3.4],
+  serveLong:  [3.0, 7.0],
+  serveShort: [1.5, 3.5],
+  drive:      [3.0, 6.5],
 };
 
 export const isServe = (s: ShotType) => s === 'serveLong' || s === 'serveShort';
 
-export function speedForPower(shot: ShotType, power: number): number {
-  const [v0, v1] = SHOT_SPEC[shot].speed;
-  return Math.max(2, v0 + (v1 - v0) * power);
+/** Tốc độ cú đập theo lực */
+export function smashSpeed(power: number): number {
+  const [v0, v1] = SMASH_SPEED;
+  return v0 + (v1 - v0) * power;
 }
 
-/** Ngược lại: muốn cầu bay với tốc độ v thì cần bao nhiêu lực (AI dùng) */
-export function powerForSpeed(shot: ShotType, v: number): number {
-  const [v0, v1] = SHOT_SPEC[shot].speed;
-  return THREE.MathUtils.clamp((v - v0) / (v1 - v0), 0, 1);
+/** Độ sâu (m tính từ lưới) mà lực p nhắm tới */
+export function depthForPower(shot: ShotType, p: number): number {
+  if (shot === 'smash') return SHOT_SPEC.smash.depth;
+  const [d0, d1] = DEPTH_RANGE[shot];
+  return d0 + (d1 - d0) * p;
 }
 
-/** Điểm nhắm trên sân đối thủ, theo loại cú và hướng trái/phải */
-export function aimPoint(hitter: Side, shot: ShotType, aim: Aim, serveRight: boolean): THREE.Vector3 {
+/** Ngược lại: muốn cầu rơi cách lưới d mét thì cần bao nhiêu lực (AI dùng) */
+export function powerForDepth(shot: Exclude<ShotType, 'smash'>, d: number): number {
+  const [d0, d1] = DEPTH_RANGE[shot];
+  return THREE.MathUtils.clamp((d - d0) / (d1 - d0), 0, 1);
+}
+
+/**
+ * Điểm nhắm trên sân đối thủ, theo loại cú, hướng trái/phải và lực.
+ * Không truyền power thì dùng độ sâu mặc định của cú (SHOT_SPEC.depth).
+ */
+export function aimPoint(hitter: Side, shot: ShotType, aim: Aim, serveRight: boolean, power?: number): THREE.Vector3 {
   const opp = other(hitter);
-  const z = sideSign(opp) * SHOT_SPEC[shot].depth;
+  const depth = power === undefined ? SHOT_SPEC[shot].depth : depthForPower(shot, power);
+  const z = sideSign(opp) * depth;
   const x = isServe(shot)
     ? courtXSign(opp, serveRight) * 1.3                      // giữa ô nhận giao (chéo góc)
     : aim * courtXSign(hitter, true) * (SINGLES_HALF_W - 0.7); // aim theo góc nhìn người đánh
