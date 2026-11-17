@@ -12,6 +12,8 @@ import type { HumanController } from '../input/humanController';
 const INTERP_DELAY = 0.1;   // vẽ đối thủ trễ 0.1 s để luôn có 2 ảnh chụp kẹp hai đầu mà nội suy
 const RESEND_EVERY = 0.1;   // Intent không đổi thì vẫn gửi lại mỗi 0.1 s (phòng tin bị mất)
 const SNAP_DIST = 1.5;      // dự đoán lệch server quá 1.5 m thì nhảy thẳng tới vị trí server
+const SHUTTLE_BLEND = 0.08; // quả cầu bị "giật" (vd. lúc có người đánh) thì trượt về vị trí mới trong ~0.08 s
+const SHUTTLE_JUMP = 0.15;  // lệch dưới 15 cm coi như bình thường, không cần làm mượt
 
 /** Không có controller thật: Match trên client không bao giờ tự chạy update() */
 const idle = { update: (): Intent => ({ moveX: 0, moveZ: 0, charge: null, aim: 0, sprint: false, dash: false }) };
@@ -49,6 +51,9 @@ export class OnlineGame {
   private seq = 0;
   private lastSentJson = '';
   private sinceSend = 0;
+    /** Vị trí + vận tốc quả cầu (chưa làm mượt) ở khung hình trước, và độ lệch đang được giảm dần về 0 */
+  private prevShuttle: { pos: THREE.Vector3; vel: THREE.Vector3 } | null = null;
+  private readonly shuttleOffset = new THREE.Vector3();
 
   constructor(room: Room, local: Side, ctrl: HumanController) {
     this.room = room;
@@ -179,11 +184,12 @@ export class OnlineGame {
   }
 
   // ===== Mỗi khung hình: chuẩn bị dữ liệu để vẽ =====
-  frame(): void {
+  frame(frameDt: number): void {
     const s = this.latest;
     if (!s) return;
     this.interpolateOpponent();
     this.extrapolateShuttle(s);
+    this.smoothShuttle(s, frameDt);
   }
 
   private interpolateOpponent(): void {
@@ -227,6 +233,32 @@ export class OnlineGame {
     m.shuttlePos.y = Math.max(0, m.shuttlePos.y);
   }
 
+    /**
+   * Làm mượt chỗ quả cầu bị giật.
+   * Khi có người đánh trúng, client chỉ biết sau khi ảnh chụp tới (trễ ~nửa vòng khứ hồi), nên quả cầu đã kịp
+   * bay quá cây vợt theo quỹ đạo cũ rồi mới nhảy sang quỹ đạo mới. Thay vì nhảy ngay, giữ phần lệch
+   * (vị trí đáng lẽ ở đó - vị trí mới) rồi giảm dần về 0 trong khoảng SHUTTLE_BLEND giây: quả cầu "uốn" sang đường mới.
+   * Chỉ ảnh hưởng hình vẽ; trúng hay trượt vẫn do server quyết định.
+   */
+  private smoothShuttle(s: Snapshot, frameDt: number): void {
+    const m = this.match;
+    const target = m.shuttlePos.clone();
+    if (this.prevShuttle && s.phase === 'rally') {
+      // Nếu không có gì bất thường, vị trí mới ~ vị trí cũ + vận tốc cũ * thời gian 1 khung hình
+      const expected = this.prevShuttle.pos.clone().addScaledVector(this.prevShuttle.vel, frameDt);
+      const jump = expected.sub(target);
+      const d = jump.length();
+      if (d > SHUTTLE_JUMP && d < 4) this.shuttleOffset.add(jump); // giật: giữ phần lệch để trượt dần
+      else if (d >= 4) this.shuttleOffset.set(0, 0, 0);            // lệch quá xa (điểm mới...): nhảy luôn
+      this.shuttleOffset.multiplyScalar(Math.exp(-frameDt / SHUTTLE_BLEND));
+    } else {
+      this.shuttleOffset.set(0, 0, 0);
+    }
+    this.prevShuttle = { pos: target, vel: m.shuttleVel.clone() };
+    m.shuttlePos.add(this.shuttleOffset);
+    m.shuttlePos.y = Math.max(0, m.shuttlePos.y);
+  }
+  
   /** Dòng thông báo theo góc nhìn của mình (server viết theo tên người chơi) */
   get localMessage(): string | null {
     const s = this.latest;

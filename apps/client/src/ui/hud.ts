@@ -1,5 +1,5 @@
-import type { Match } from '@badminton/shared/match';
-import { other, type Side } from '@badminton/shared/types';
+import type { Match } from "@badminton/shared/match";
+import { other, type Side } from "@badminton/shared/types";
 
 /** Chỉ bật tính năng tải log (phím P) khi chạy dev; bản build deploy sẽ ẩn đi. */
 export const LOG_DOWNLOAD_ENABLED = import.meta.env.DEV;
@@ -16,11 +16,11 @@ export class Hud {
   private readonly match: Match;
   private readonly local: Side;
   /** Dòng phụ, ví dụ mã phòng / trạng thái kết nối khi chơi online */
-  extra = '';
+  extra = "";
   /** Ghi đè thông báo của trận (online: đổi "Lượt Han giao..." thành "Lượt bạn giao...") */
   messageOverride: string | null = null;
   /** Dòng cuối của hướng dẫn phím (offline và online khác nhau) */
-  lastHelpLine = '';
+  lastHelpLine = "";
 
   private readonly scoreEls: Record<Side, HTMLElement>;
   private readonly serveEls: Record<Side, HTMLElement>;
@@ -28,63 +28,96 @@ export class Hud {
   private readonly extraEl: HTMLElement;
   private readonly helpLine: HTMLElement;
   private readonly banner: HTMLElement;
-  private last = { near: -1, far: -1, server: '', message: '\u0000', opp: '', extra: '\u0000', help: '\u0000' };
+  private readonly invite: HTMLElement;
+  private readonly inviteUrl: HTMLElement;
+  private readonly inviteBtn: HTMLButtonElement;
+  private inviteLink = "";
+  private last = {
+    near: -1,
+    far: -1,
+    server: "",
+    message: "\u0000",
+    opp: "",
+    extra: "\u0000",
+    help: "\u0000",
+  };
 
-  constructor(match: Match, local: Side = 'near') {
+  constructor(match: Match, local: Side = "near") {
     this.match = match;
     this.local = local;
-    const me = local, opp = other(local);
-    const hud = document.getElementById('hud')!;
-    const help = document.getElementById('help')!;
+    const me = local,
+      opp = other(local);
+    const hud = document.getElementById("hud")!;
+    const help = document.getElementById("help")!;
 
     hud.innerHTML = `
       <div class="overflow-hidden rounded-xl border border-white/10 bg-slate-900/70 shadow-lg shadow-black/40 backdrop-blur-md">
         <div class="bg-white/5 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-white/50">Tỉ số</div>
-        ${row(me, 'Bạn', me === 'near' ? 'bg-blue-500' : 'bg-red-500')}
+        ${row(me, "Bạn", me === "near" ? "bg-blue-500" : "bg-red-500")}
         <div class="h-px bg-white/10"></div>
-        ${row(opp, '', opp === 'near' ? 'bg-blue-500' : 'bg-red-500')}
+        ${row(opp, "", opp === "near" ? "bg-blue-500" : "bg-red-500")}
       </div>
-      <div data-extra hidden class="mt-2 rounded-lg border border-white/10 bg-slate-900/70 px-3 py-1.5 text-xs text-white/70 backdrop-blur-md"></div>`;
+      <div data-extra hidden class="mt-2 rounded-lg border border-white/10 bg-slate-900/70 px-3 py-1.5 text-xs text-white/70 backdrop-blur-md">
+              <div data-invite hidden class="pointer-events-auto mt-2 rounded-lg border border-emerald-400/30 bg-slate-900/80 p-2.5 text-xs text-white/70 shadow-lg shadow-black/40 backdrop-blur-md">
+        <div class="mb-1">Gửi link này cho bạn để vào thẳng phòng:</div>
+              </div>
+      <div data-extra hidden class="mt-2 rounded-lg border border-white/10 bg-slate-900/70 px-3 py-1.5 text-xs text-white/70 backdrop-blur-md"></div>
+      <div data-invite hidden class="pointer-events-auto mt-2 rounded-lg border border-emerald-400/30 bg-slate-900/80 p-2.5 text-xs text-white/70 shadow-lg shadow-black/40 backdrop-blur-md">
+        <div class="mb-1">Gửi link này cho bạn để vào thẳng phòng:</div>
+        <div data-invite-url class="select-all break-all font-mono text-[11px] text-emerald-300"></div>
+        <button data-invite-copy type="button" class="mt-2 w-full rounded-md bg-emerald-500 px-2 py-1 font-semibold text-white transition hover:bg-emerald-400">Copy link mời (C)</button>
+      </div>`;
 
-    const keys = (...k: string[]) => k.map(kbd).join('');
+    const keys = (...k: string[]) => k.map(kbd).join("");
     const item = (k: string, label: string) =>
       `<div class="flex items-center gap-1.5"><span class="flex gap-0.5">${k}</span><span>${label}</span></div>`;
     help.innerHTML = `
       <div class="grid grid-cols-[auto_auto] gap-x-5 gap-y-1.5 rounded-xl border border-white/10 bg-slate-900/60 px-3 py-2.5 text-xs text-white/80 shadow-lg shadow-black/40 backdrop-blur-md">
-        ${item(keys('W', 'A', 'S', 'D'), 'Di chuyển')}
-        ${item(keys('Shift'), 'Chạy nhanh')}
-        ${item(keys('Space'), 'Bứt tốc')}
-        ${item(keys('Q', 'E'), 'Đánh trái / phải')}
+        ${item(keys("W", "A", "S", "D"), "Di chuyển")}
+        ${item(keys("Shift"), "Chạy nhanh")}
+        ${item(keys("Space"), "Bứt tốc")}
+        ${item(keys("Q", "E"), "Đánh trái / phải")}
         <div class="col-span-2 mt-1 border-t border-white/10 pt-1.5 text-[10px] uppercase tracking-wider text-white/40">Giữ để nạp lực · nhả để vung</div>
-        ${item(keys('J'), 'Phông cầu')}
-        ${item(keys('K'), 'Đập cầu')}
-        ${item(keys('L'), 'Bỏ nhỏ')}
+        ${item(keys("J"), "Phông cầu")}
+        ${item(keys("K"), "Đập cầu")}
+        ${item(keys("L"), "Bỏ nhỏ")}
         <div></div>
         <div data-help-line class="col-span-2 mt-1 border-t border-white/10 pt-1.5 text-white/60"></div>
       </div>`;
 
     // Banner thông báo ở giữa phía trên (whitespace-pre-line: thông báo online có thể 2 dòng)
-    this.banner = document.createElement('div');
+    this.banner = document.createElement("div");
     this.banner.className =
-      'pointer-events-none fixed top-4 left-1/2 max-w-[calc(100vw-2rem)] -translate-x-1/2 whitespace-pre-line rounded-2xl border border-white/10 bg-slate-900/70 px-5 py-2 text-center text-sm font-medium text-white shadow-lg shadow-black/40 backdrop-blur-md transition-opacity duration-300';
+      "pointer-events-none fixed top-4 left-1/2 max-w-[calc(100vw-2rem)] -translate-x-1/2 whitespace-pre-line rounded-2xl border border-white/10 bg-slate-900/70 px-5 py-2 text-center text-sm font-medium text-white shadow-lg shadow-black/40 backdrop-blur-md transition-opacity duration-300";
     document.body.appendChild(this.banner);
 
-    this.scoreEls = { near: hud.querySelector('[data-score="near"]')!, far: hud.querySelector('[data-score="far"]')! };
-    this.serveEls = { near: hud.querySelector('[data-serve="near"]')!, far: hud.querySelector('[data-serve="far"]')! };
+    this.scoreEls = {
+      near: hud.querySelector('[data-score="near"]')!,
+      far: hud.querySelector('[data-score="far"]')!,
+    };
+    this.serveEls = {
+      near: hud.querySelector('[data-serve="near"]')!,
+      far: hud.querySelector('[data-serve="far"]')!,
+    };
     this.oppName = hud.querySelector(`[data-name="${opp}"]`)!;
-    this.extraEl = hud.querySelector('[data-extra]')!;
-    this.helpLine = help.querySelector('[data-help-line]')!;
+    this.extraEl = hud.querySelector("[data-extra]")!;
+    this.invite = hud.querySelector("[data-invite]")!;
+    this.inviteUrl = hud.querySelector("[data-invite-url]")!;
+    this.inviteBtn = hud.querySelector("[data-invite-copy]")!;
+    this.inviteBtn.onclick = () => this.copyInvite();
+    this.helpLine = help.querySelector("[data-help-line]")!;
   }
 
   update(): void {
     const m = this.match;
     const l = this.last;
-    for (const s of ['near', 'far'] as const) {
+    for (const s of ["near", "far"] as const) {
       if (m.score[s] !== l[s]) this.bump(this.scoreEls[s], (l[s] = m.score[s]));
     }
     if (m.server !== l.server) {
       l.server = m.server;
-      for (const s of ['near', 'far'] as const) this.serveEls[s].style.opacity = m.server === s ? '1' : '0';
+      for (const s of ["near", "far"] as const)
+        this.serveEls[s].style.opacity = m.server === s ? "1" : "0";
     }
     const opp = m.names[other(this.local)];
     if (opp !== l.opp) this.oppName.textContent = l.opp = opp;
@@ -93,7 +126,7 @@ export class Hud {
     if (message !== l.message) {
       l.message = message;
       this.banner.textContent = message;
-      this.banner.style.opacity = message ? '1' : '0';
+      this.banner.style.opacity = message ? "1" : "0";
     }
     if (this.extra !== l.extra) {
       l.extra = this.extra;
@@ -107,12 +140,42 @@ export class Hud {
     }
   }
 
+  /** Hiện khung link mời (đang chờ đối thủ) hoặc ẩn đi (null) */
+  setInvite(link: string | null): void {
+    if ((link ?? "") === this.inviteLink) return;
+    this.inviteLink = link ?? "";
+    this.inviteUrl.textContent = this.inviteLink;
+    this.invite.hidden = !link;
+  }
+
+  /** Copy link mời vào clipboard. Trình duyệt chặn thì nhắc người chơi tự bôi đen */
+  copyInvite(): void {
+    if (!this.inviteLink) return;
+    const done = (text: string) => {
+      this.inviteBtn.textContent = text;
+      setTimeout(() => {
+        this.inviteBtn.textContent = "Copy link mời (C)";
+      }, 1500);
+    };
+    const fail = () => done("Không copy được, hãy bôi đen link");
+    if (!navigator.clipboard) {
+      fail();
+      return;
+    } // chỉ có trên https hoặc localhost
+    navigator.clipboard
+      .writeText(this.inviteLink)
+      .then(() => done("Đã copy ✓"), fail);
+  }
+
   /** Đổi số và cho nảy nhẹ khi ghi điểm. */
   private bump(el: HTMLElement, value: number): void {
     el.textContent = String(value);
     el.animate(
-      [{ transform: 'scale(1.5)', color: '#facc15' }, { transform: 'scale(1)', color: 'inherit' }],
-      { duration: 400, easing: 'ease-out' },
+      [
+        { transform: "scale(1.5)", color: "#facc15" },
+        { transform: "scale(1)", color: "inherit" },
+      ],
+      { duration: 400, easing: "ease-out" },
     );
   }
 }
