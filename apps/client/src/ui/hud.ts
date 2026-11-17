@@ -57,10 +57,9 @@ export class Hud {
         <div class="h-px bg-white/10"></div>
         ${row(opp, "", opp === "near" ? "bg-blue-500" : "bg-red-500")}
       </div>
-      <div data-extra hidden class="mt-2 rounded-lg border border-white/10 bg-slate-900/70 px-3 py-1.5 text-xs text-white/70 backdrop-blur-md">
-              <div data-invite hidden class="pointer-events-auto mt-2 rounded-lg border border-emerald-400/30 bg-slate-900/80 p-2.5 text-xs text-white/70 shadow-lg shadow-black/40 backdrop-blur-md">
+      <div data-extra hidden class="mt-2 rounded-lg border border-white/10 bg-slate-900/70 px-3 py-1.5 text-xs text-white/70 backdrop-blur-md"></div>
+      <div data-invite hidden class="pointer-events-auto mt-2 rounded-lg border border-emerald-400/30 bg-slate-900/80 p-2.5 text-xs text-white/70 shadow-lg shadow-black/40 backdrop-blur-md">
         <div class="mb-1">Gửi link này cho bạn để vào thẳng phòng:</div>
-              </div>
         <div data-invite-url class="select-all break-all font-mono text-[11px] text-emerald-300"></div>
         <button data-invite-copy type="button" class="mt-2 w-full rounded-md bg-emerald-500 px-2 py-1 font-semibold text-white transition hover:bg-emerald-400">Copy link mời (C)</button>
       </div>`;
