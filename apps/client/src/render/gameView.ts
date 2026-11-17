@@ -7,6 +7,7 @@ import { PlayerView, ShuttleView } from './entities';
 import { LandingMarker } from './landingMarker';
 import { createWorld } from './scene';
 import { StatusBars } from './statusBars';
+import { SoundFx } from '../audio/sfx';
 
 /**
  * Toàn bộ phần VẼ của một trận: sân, 2 người, quả cầu, các chỉ báo riêng của người chơi trên máy này, camera, HUD.
@@ -16,6 +17,7 @@ import { StatusBars } from './statusBars';
  */
 export class GameView {
   readonly hud: Hud;
+  readonly sfx: SoundFx;
   private readonly world = createWorld();
   private readonly views: PlayerView[];
   private readonly shuttle = new ShuttleView();
@@ -39,6 +41,7 @@ export class GameView {
     scene.add(this.landing.mesh, this.aim.group, this.bars.group);
     this.cam = new ThirdPersonCamera(camera, me);
     this.hud = new Hud(match, local);
+    this.sfx = new SoundFx(match, local);
   }
 
   render(frameDt: number): void {
@@ -50,6 +53,7 @@ export class GameView {
     this.bars.sync();
     this.cam.update(m.shuttlePos);
     this.hud.update();
+    this.sfx.update();
     this.world.renderer.render(this.world.scene, this.world.camera);
   }
 }

@@ -26,10 +26,13 @@ export class Menu {
     this.render(msg, false);
   }
 
+    /** Đang chờ kết nối: đổi dòng trạng thái (vd. "Server đang khởi động...") */
+  status(text: string): void { this.render('', true, text); }
+
   hide(): void { this.root.render(null); }
 
-  private render(error: string, busy: boolean): void {
-    this.root.render(createElement(MenuScreen, { error, busy, onChoose: (c) => this.pick(c) }));
+  private render(error: string, busy: boolean, busyText?: string): void {
+    this.root.render(createElement(MenuScreen, { error, busy, busyText, onChoose: (c) => this.pick(c) }));
   }
 
   private pick(c: MenuChoice): void {

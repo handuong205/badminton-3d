@@ -24,6 +24,8 @@ interface Props {
   error: string;
   /** Đang chờ kết nối server: khóa các nút */
   busy: boolean;
+    /** Dòng chữ lúc đang chờ (mặc định "Đang kết nối tới server...") */
+  busyText?: string;
   onChoose: (c: MenuChoice) => void;
 }
 
@@ -31,7 +33,7 @@ interface Props {
  * Màn hình nhập thông tin phòng: tên, chơi với máy, tạo phòng hoặc vào phòng bằng mã 6 số.
  * Link dạng ?room=123456 sẽ điền sẵn mã phòng (tiện gửi cho bạn bè).
  */
-export function MenuScreen({ error, busy, onChoose }: Props) {
+export function MenuScreen({ error, busy, busyText, onChoose }: Props) {
   const [name, setName] = useState(() => load(NAME_KEY));
   const [code, setCode] = useState(() => onlyDigits(new URLSearchParams(location.search).get('room') ?? ''));
   const [localError, setLocalError] = useState('');
@@ -136,7 +138,7 @@ export function MenuScreen({ error, busy, onChoose }: Props) {
               {busy ? (
                 <span className="inline-flex items-center gap-2 text-white/70">
                   <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/20 border-t-white" />
-                  Đang kết nối tới server...
+                     {busyText ?? 'Đang kết nối tới server...'}
                 </span>
               ) : message ? (
                 <span className="text-rose-400">{message}</span>
