@@ -63,7 +63,15 @@ export class DuelRoom extends Room {
 
     // Không có trạng thái Schema: tự gửi snapshot bằng tin nhắn nên tắt patch tự động
     this.patchRate = null;
-    this.setTimestep((ms) => this.tick(ms / 1000), FIXED_DT * 1000);
+        // Tự đo thời gian thật giữa 2 lần gọi. KHÔNG dùng số ms Colyseus truyền vào: khi tắt patch (patchRate = null),
+    // Colyseus còn một bộ hẹn giờ khác cũng "tick" chung đồng hồ đó, nên số ms nhận được bị hụt ~30%
+    // -> trận trên server chạy chậm hơn thời gian thật, lệch với dự đoán của client -> nhân vật bị kéo giật
+    let last = performance.now();
+    this.setTimestep(() => {
+      const now = performance.now();
+      this.tick((now - last) / 1000);
+      last = now;
+    }, FIXED_DT * 1000);
 
     // Tạo phòng mà lâu không có đối thủ vào thì hủy, đỡ tốn tài nguyên server
     this.clock.setTimeout(() => {
@@ -148,9 +156,11 @@ export class DuelRoom extends Room {
       if (this.match.phase === 'matchOver') this.status = 'over';
     }
 
+        // Trừ đúng 1 chu kỳ (không đặt về 0) để giữ đều 20 ảnh chụp/giây.
+    // Đặt về 0 thì phần dư bị bỏ, thực tế chỉ còn ~17 lần/giây và khoảng cách lúc 50 lúc 58 ms
     this.snapAcc += dt;
     if (this.snapAcc < 1 / SNAPSHOT_HZ) return;
-    this.snapAcc = 0;
+    this.snapAcc = Math.min(this.snapAcc - 1 / SNAPSHOT_HZ, 1 / SNAPSHOT_HZ);
     this.sendSnapshots();
   }
 

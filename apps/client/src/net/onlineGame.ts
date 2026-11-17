@@ -1,15 +1,19 @@
 import * as THREE from 'three';
 import type { Room } from '@colyseus/sdk';
 import { Match, keepInOwnHalf, shouldJumpSmash } from '@badminton/shared/match';
-import { Player, SWING, swingImpact } from '@badminton/shared/player';
 import { FIXED_DT, stepShuttle } from '@badminton/shared/physics';
+import { Player, SWING, swingImpact } from '@badminton/shared/player';
 import type { InputMsg, PrivateSnap, RoomStatus, Snapshot } from '@badminton/shared/protocol';
 import { NET_H } from '@badminton/shared/rules';
 import { isServe } from '@badminton/shared/shots';
 import { other, type Intent, type ShotType, type Side } from '@badminton/shared/types';
 import type { HumanController } from '../input/humanController';
+import { LagSim } from './lagSim';
 
-const INTERP_DELAY = 0.1;   // vẽ đối thủ trễ 0.1 s để luôn có 2 ảnh chụp kẹp hai đầu mà nội suy
+const SNAP_PERIOD = 1 / 20;  // server gửi ảnh chụp 20 lần/giây
+const MAX_EXTRAPOLATE = 0.1; // ảnh chụp tới muộn: đoán tiếp đối thủ theo vận tốc tối đa 0.1 s rồi đứng chờ
+const CORRECT_TIME = 0.12;   // lệch vị trí so với server thì kéo về dần trong ~0.12 s, không kéo giật 1 lần
+const CORRECT_MIN = 0.02;    // lệch dưới 2 cm thì bỏ qua (sai số làm tròn), khỏi kéo
 const RESEND_EVERY = 0.1;   // Intent không đổi thì vẫn gửi lại mỗi 0.1 s (phòng tin bị mất)
 const SNAP_DIST = 1.5;      // dự đoán lệch server quá 1.5 m thì nhảy thẳng tới vị trí server
 const SHUTTLE_BLEND = 0.08; // quả cầu bị "giật" (vd. lúc có người đánh) thì trượt về vị trí mới trong ~0.08 s
@@ -25,7 +29,7 @@ const idle = { update: (): Intent => ({ moveX: 0, moveZ: 0, charge: null, aim: 0
  * 1. Gửi Intent của mình lên (mỗi khi đổi, và nhắc lại mỗi 0.1 s).
  * 2. Dự đoán (client-side prediction): tự di chuyển nhân vật của mình ngay khi bấm phím, không chờ server.
  *    Khi ảnh chụp của server tới, so với vị trí mình đã dự đoán TẠI CÙNG THỜI ĐIỂM rồi kéo dần về cho khớp.
- * 3. Nội suy (interpolation) đối thủ: vẽ đối thủ ở thời điểm trễ 0.1 s, nằm giữa 2 ảnh chụp, nên mượt.
+ * 3. Nội suy (interpolation) đối thủ: vẽ đối thủ trễ một chút (0.07..0.3 s tùy mạng ổn định hay không), nằm giữa 2 ảnh chụp, nên mượt.
  * 4. Ngoại suy quả cầu: vật lý tất định nên từ vị trí + vận tốc server gửi, tự tính trước tới thời điểm
  *    mà phím mình bấm bây giờ sẽ tới server. Nhờ vậy canh vợt theo quả cầu trên màn hình là khớp với server.
  *
@@ -38,11 +42,14 @@ export class OnlineGame {
   rematch: Record<Side, boolean> = { near: false, far: false };
   connectedOpp = false;
   rtt = 0.05;                 // thời gian khứ hồi (giây)
+  jitter = 0;                 // độ dao động thời gian tới của ảnh chụp (giây)
+  interpDelay = 0.1;          // đang vẽ đối thủ trễ bao nhiêu giây so với ảnh chụp mới nhất
 
   private readonly room: Room;
   private readonly me: Player;
   private readonly them: Player;
   private readonly ctrl: HumanController;
+  private readonly lagSim: LagSim;
   private snaps: Snapshot[] = [];
   private latest: Snapshot | null = null;
   private offset: number | null = null; // đồng hồ server - đồng hồ client
@@ -52,11 +59,16 @@ export class OnlineGame {
   private lastSentJson = '';
   private sinceSend = 0;
   private localJumpAt = -1;            // lúc client tự dự đoán bật nhảy (để không bị ảnh chụp cũ hủy mất)
-    /** Vị trí + vận tốc quả cầu (chưa làm mượt) ở khung hình trước, và độ lệch đang được giảm dần về 0 */
+  /** Vị trí + vận tốc quả cầu (chưa làm mượt) ở khung hình trước, và độ lệch đang được giảm dần về 0 */
   private prevShuttle: { pos: THREE.Vector3; vel: THREE.Vector3 } | null = null;
   private readonly shuttleOffset = new THREE.Vector3();
+  /** Ảnh chụp thường tới sau (giờ máy mình - giờ server trong ảnh) bao nhiêu giây, trung bình trượt */
+  private snapLag: number | null = null;
+  /** Phần lệch vị trí của mình so với server còn chưa kéo xong */
+  private readonly pendingFix = new THREE.Vector3();
 
-  constructor(room: Room, local: Side, ctrl: HumanController) {
+  constructor(room: Room, local: Side, ctrl: HumanController, lagSim = new LagSim()) {
+    this.lagSim = lagSim;
     this.room = room;
     this.local = local;
     this.ctrl = ctrl;
@@ -66,9 +78,10 @@ export class OnlineGame {
     this.them.controller = idle;
     this.match = local === 'near' ? new Match(this.me, this.them) : new Match(this.them, this.me);
 
-    room.onMessage('snap', (s: Snapshot) => this.onSnapshot(s));
-    room.onMessage('me', (p: PrivateSnap) => { this.me.stamina = p.stamina; });
-    const ping = () => room.ping((ms) => { this.rtt = this.rtt * 0.7 + (ms / 1000) * 0.3; });
+    const lag = this.lagSim;
+    room.onMessage('snap', (s: Snapshot) => lag.incoming(() => this.onSnapshot(s)));
+    room.onMessage('me', (p: PrivateSnap) => lag.incoming(() => { this.me.stamina = p.stamina; }));
+    const ping = () => room.ping((ms) => { this.rtt = this.rtt * 0.7 + (lag.ping(ms) / 1000) * 0.3; });
     ping();
     setInterval(ping, 2000);
   }
@@ -76,7 +89,7 @@ export class OnlineGame {
   /** Thời gian trên đồng hồ server ước lượng ở thời điểm hiện tại */
   private get serverNow(): number { return this.clock + (this.offset ?? 0); }
 
-  requestRematch(): void { if (this.status === 'over') this.room.send('rematch'); }
+  requestRematch(): void { if (this.status === 'over') this.lagSim.outgoing(() => this.room.send('rematch')); }
 
   // ===== 1 bước cố định (120 lần/giây) =====
   step(dt = FIXED_DT): void {
@@ -93,23 +106,14 @@ export class OnlineGame {
     else if (s.phase === 'rally' && intent.charge && !isServe(intent.charge)) charge = intent.charge;
     const me = this.me;
     if (charge && !me.swing) {
-      if (!me.chargingShot) me.chargeTime = 0;
-      else me.chargeTime += dt;
+      if (!me.chargingShot) me.chargeTime = 0; else me.chargeTime += dt;
       me.chargingShot = charge;
       me.chargeAim = intent.aim;
     } else if (!charge && me.chargingShot) {
-      me.swing = {
-        shot: me.chargingShot,
-        power: me.chargePower,
-        aim: intent.aim,
-        t: 0,
-      };
+      me.swing = { shot: me.chargingShot, power: me.chargePower, aim: intent.aim, t: 0 };
       // Dự đoán nhảy đập giống luật trên server (cầu đã được ngoại suy tới lúc server nhận phím).
       // Không trừ thể lực ở đây: thể lực luôn lấy theo server
-      if (
-        me.swing.shot === "smash" &&
-        shouldJumpSmash(me, this.match.shuttlePos, this.match.shuttleVel)
-      ) {
+      if (me.swing.shot === 'smash' && shouldJumpSmash(me, this.match.shuttlePos, this.match.shuttleVel)) {
         me.swing.jump = true;
         me.jumpT = 0;
         this.localJumpAt = this.clock;
@@ -117,9 +121,7 @@ export class OnlineGame {
       me.chargingShot = null;
     }
     // Gợi ý thanh lực vàng: nhả ngay thì nhảy đập
-    me.jumpReady =
-      me.chargingShot === "smash" &&
-      shouldJumpSmash(me, this.match.shuttlePos, this.match.shuttleVel);
+    me.jumpReady = me.chargingShot === 'smash' && shouldJumpSmash(me, this.match.shuttlePos, this.match.shuttleVel);
     if (me.swing) {
       me.swing.t += dt;
       if (me.swing.t > swingImpact(me.swing) + SWING.windowMax) me.swing = null;
@@ -129,6 +131,13 @@ export class OnlineGame {
     // Dự đoán di chuyển: lúc giao cầu server không cho ai di chuyển, nên client cũng vậy
     if (s.phase !== 'serve' && s.phase !== 'matchOver') {
       me.move(intent, dt);
+      // Kéo dần phần lệch so với server: mỗi bước một ít, nhìn như trượt nhẹ thay vì giật
+      if (this.pendingFix.lengthSq() > 0) {
+        const part = this.pendingFix.clone().multiplyScalar(1 - Math.exp(-dt / CORRECT_TIME));
+        me.pos.add(part);
+        this.pendingFix.sub(part);
+        for (const e of this.history) e.pos.add(part);
+      }
       keepInOwnHalf(me);
     }
     this.history.push({ t: this.clock, pos: me.pos.clone() });
@@ -141,7 +150,8 @@ export class OnlineGame {
     if (json === this.lastSentJson && this.sinceSend < RESEND_EVERY) return;
     this.lastSentJson = json;
     this.sinceSend = 0;
-    this.room.send('input', { seq: ++this.seq, intent } satisfies InputMsg);
+    const msg: InputMsg = { seq: ++this.seq, intent };
+    this.lagSim.outgoing(() => this.room.send('input', msg));
   }
 
   // ===== Nhận ảnh chụp từ server =====
@@ -156,7 +166,8 @@ export class OnlineGame {
     this.snaps.push(s);
     while (this.snaps.length > 2 && this.snaps[0].t < s.t - 1) this.snaps.shift();
     // Ván mới / điểm mới thì đồng hồ trận có thể lùi: bỏ dữ liệu cũ
-    if (prev && s.t < prev.t) { this.snaps = [s]; this.offset = sample; }
+    if (prev && s.t < prev.t) { this.snaps = [s]; this.offset = sample; this.snapLag = null; }
+    this.measureArrival(s);
 
     this.status = s.status;
     this.rematch = s.rematch;
@@ -184,8 +195,8 @@ export class OnlineGame {
       me.pos.copy(serverPos);
       me.vel.set(...sp.vel);
       me.chargingShot = s.phase === 'serve' && sp.charging ? me.chargingShot : null;
-
       this.history = [];
+      this.pendingFix.set(0, 0, 0);
       return;
     }
     this.syncJump(me, sp.jumpT, sp.landLock);
@@ -199,12 +210,26 @@ export class OnlineGame {
       me.pos.copy(serverPos);
       me.vel.set(...sp.vel);
       this.history = [];
+      this.pendingFix.set(0, 0, 0);
       return;
     }
-    // Kéo về 30% phần lệch mỗi ảnh chụp (20 lần/giây) -> mượt, không giật
-    const fix = err.multiplyScalar(0.3);
-    me.pos.add(fix);
-    for (const e of this.history) if (e.t >= h.t) e.pos.add(fix);
+    // Không kéo ngay mà giao cho step() kéo dần trong ~CORRECT_TIME giây.
+    // Gán (không cộng dồn): err đo trên lịch sử đã được kéo một phần, nên đã tính cả phần còn đang chờ
+    if (err.length() < CORRECT_MIN) this.pendingFix.set(0, 0, 0);
+    else this.pendingFix.copy(err);
+  }
+
+  /**
+   * Đo ảnh chụp tới đều hay thất thường, để chọn độ trễ khi vẽ đối thủ.
+   * lag = giờ máy mình lúc nhận - giờ server trong ảnh (gồm cả chênh đồng hồ, không cần biết chính xác).
+   * Trung bình trượt của lag là mốc "tới đúng hẹn"; jitter = trung bình độ lệch khỏi mốc đó.
+   */
+  private measureArrival(s: Snapshot): void {
+    const lag = performance.now() / 1000 - s.t;
+    if (this.snapLag === null || Math.abs(lag - this.snapLag) > 0.5) { this.snapLag = lag; return; }
+    const d = lag - this.snapLag;
+    this.snapLag += d * 0.05;
+    this.jitter += (Math.abs(d) - this.jitter) * 0.1;
   }
 
   /**
@@ -222,14 +247,24 @@ export class OnlineGame {
   frame(frameDt: number): void {
     const s = this.latest;
     if (!s) return;
-    this.interpolateOpponent();
+    this.interpolateOpponent(frameDt);
     this.extrapolateShuttle(s);
     this.smoothShuttle(s, frameDt);
   }
 
-  private interpolateOpponent(): void {
+  /**
+   * Vẽ đối thủ ở thời điểm t = (giờ ảnh chụp "lẽ ra mới tới") - interpDelay, nằm giữa 2 ảnh chụp đã nhận.
+   * Mốc thời gian tính theo lúc ảnh chụp THẬT SỰ tới máy mình, không theo đồng hồ server ước lượng:
+   * bản cũ dùng serverNow (đã cộng nửa ping) nên ping > 200 ms là t luôn vượt quá ảnh chụp mới nhất,
+   * đối thủ chỉ nhảy cóc 20 lần/giây.
+   * interpDelay = 1 chu kỳ ảnh chụp + biên an toàn theo jitter: mạng càng thất thường thì đệm càng dày.
+   */
+  private interpolateOpponent(frameDt: number): void {
     const side = other(this.local);
-    const t = this.serverNow - INTERP_DELAY;
+    const want = THREE.MathUtils.clamp(SNAP_PERIOD + 0.02 + 2.5 * this.jitter, 0.07, 0.3);
+    // Đổi độ trễ từ từ (tối đa 10% tốc độ thời gian), nếu không đối thủ sẽ khựng hoặc tua nhanh
+    this.interpDelay += THREE.MathUtils.clamp(want - this.interpDelay, -0.1 * frameDt, 0.1 * frameDt);
+    const t = performance.now() / 1000 - (this.snapLag ?? 0) - this.interpDelay;
     let a = this.snaps[0], b = this.snaps[this.snaps.length - 1];
     for (let i = 0; i < this.snaps.length - 1; i++) {
       if (this.snaps[i].t <= t && this.snaps[i + 1].t >= t) { a = this.snaps[i]; b = this.snaps[i + 1]; break; }
@@ -239,6 +274,8 @@ export class OnlineGame {
     const p = this.them;
     p.pos.set(...pa.pos).lerp(new THREE.Vector3(...pb.pos), k);
     p.vel.set(...pa.vel).lerp(new THREE.Vector3(...pb.vel), k);
+    // Ảnh chụp tới muộn hơn cả phần đệm: đoán tiếp theo vận tốc một chút thay vì đứng khựng
+    if (t > b.t) p.pos.addScaledVector(p.vel, Math.min(t - b.t, MAX_EXTRAPOLATE));
     const src = k < 0.5 ? pa : pb;
     p.chargingShot = src.charging ? 'clear' : null; // chỉ để vợt sáng lên, không lộ loại cú
     p.chargeTime = 0;
@@ -270,7 +307,7 @@ export class OnlineGame {
     m.shuttlePos.y = Math.max(0, m.shuttlePos.y);
   }
 
-    /**
+  /**
    * Làm mượt chỗ quả cầu bị giật.
    * Khi có người đánh trúng, client chỉ biết sau khi ảnh chụp tới (trễ ~nửa vòng khứ hồi), nên quả cầu đã kịp
    * bay quá cây vợt theo quỹ đạo cũ rồi mới nhảy sang quỹ đạo mới. Thay vì nhảy ngay, giữ phần lệch
