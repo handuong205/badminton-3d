@@ -7,7 +7,7 @@ import {
 import { SHOT_SPEC, SMASH_MIN_HEIGHT, aimPoint, deflect, isServe, launchDirection, smashSpeed } from './shots';
 import type { Phase, PointReason, Score, ShotType, Side } from './types';
 import { other, sideSign } from './types';
-import { CONTACT, JUMP, Player, STAMINA, SWING, reboundPower, swingImpact, swingWindow, type Swing } from './player';
+import { CONTACT, JUMP, Player, STAMINA, SWING, reboundPower, swingImpact, swingWindow, DIVE, type Swing } from './player';
 
 
 /** Sự kiện phát ra để phần ghi log (data/) và giao diện (ui/) lắng nghe */
@@ -197,7 +197,12 @@ export class Match {
     // Lực = max(lực đã nạp, lực bật lại từ cầu nhanh); với tay xa thì bị cắt theo powerCap
     const power = Math.min(Math.max(sw.power, reboundPower(incomingSpeed)), reach.powerCap);
     if (reach.stretched) p.spend(CONTACT.stretchStamina);
+    // Đang bứt tốc mà với cầu xa và thấp: lao người cứu cầu (xem DIVE). Tính trước khi hit() đổi vận tốc cầu
+    const dive = p.isLunging && !sw.jump && p.horizDist(this.shuttlePos) >= DIVE.minDist
+      && this.shuttlePos.y - p.jumpHeight <= DIVE.maxY;
+    const at = this.shuttlePos.clone();
     this.hit(p, { ...sw, power }, timing * reach.spatial, reach.stretched);
+    if (dive) p.startDive(at);
   }
 
   /** Cầu chạm đất: xác định ai thắng điểm */

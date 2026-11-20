@@ -37,7 +37,9 @@ export interface PlayerSnap {
   swingShot: ShotType | null;
   swingT: number;           // thời gian từ lúc bắt đầu vung (giây), dùng cho hoạt ảnh
   jumpT: number;            // thời gian đã ở trên không (-1 = đứng dưới đất)
-  landLock: number;         // còn bị khựng sau khi tiếp đất (giây)
+  landLock: number; 
+  diveT: number;            // thời gian từ lúc lao người cứu cầu (-1 = không lao)
+  diveYaw: number;          // hướng lao người (chỉ để vẽ)        // còn bị khựng sau khi tiếp đất (giây)
 }
 
 /** 'snap': ảnh chụp trạng thái trận, gửi cho cả phòng SNAPSHOT_HZ lần/giây */
@@ -71,7 +73,7 @@ export function playerSnap(p: Player, name: string, connected: boolean): PlayerS
   return {
     name, connected, pos: vec(p.pos), vel: vec(p.vel), charging: p.chargingShot !== null,
     swingShot: p.swing?.shot ?? null, swingT: p.swing?.t ?? 0,
-    jumpT: r3(p.jumpT), landLock: r3(p.landLock),
+    jumpT: r3(p.jumpT), landLock: r3(p.landLock), diveT: r3(p.diveT), diveYaw: r3(p.diveYaw),
   };
 }
 

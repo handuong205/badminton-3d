@@ -66,6 +66,17 @@ export const JUMP = {
   landingLock: 0.35,  // s, tiếp đất bị khựng, không di chuyển được
 };
 
+// ===== Lao người cứu cầu =====
+// Đang bứt tốc (hoặc vừa bứt tốc xong, trong lungeWindow) mà đánh trúng cầu ở xa, thấp,
+// thì nhân vật lao người theo hướng cầu: cứu được cầu nhưng nằm sàn rồi đứng dậy, mất DIVE.lock giây.
+export const DIVE = {
+  minDist: 1.25,   // m, cầu cách người từ đây trở ra mới lao (vùng vươn tay là 1.0..1.6+)
+  maxY: 1.5,       // m, cầu cao hơn thì không lao (đỡ cầu cao ai lại lao xuống sàn)
+  lock: 0.8,       // s, nằm sàn + đứng dậy: không di chuyển, không nạp lực được
+  slideSpeed: 3.5, // m/s, tốc độ trượt tối thiểu lúc chạm sàn
+  friction: 5,     // trượt chậm dần: v giảm theo e^(-friction * t), quãng trượt ~ v / friction
+};
+
 // ===== Vùng tiếp xúc (khoảng cách NGANG từ thân người tới cầu) =====
 // - Quá gần (< 0.4 m): bị "kẹt" vợt, kém chuẩn.
 // - Vùng chuẩn 0.4..1.0 m: đủ lực, chuẩn nhất. AI cố đứng cách cầu idealDist = 0.7 m.
@@ -134,6 +145,10 @@ export class Player {
   jumpT = -1;
   /** > 0: vừa tiếp đất, còn bị khựng bao nhiêu giây */
   landLock = 0;
+    /** Thời gian từ lúc bắt đầu lao người (giây); -1 = không lao */
+  diveT = -1;
+  /** Hướng lao người (góc quanh trục y, giống Math.atan2(x, z)), chỉ để vẽ */
+  diveYaw = 0;
   /** Đang giữ K và nhả ngay thì sẽ nhảy đập (chỉ để vẽ gợi ý) */
   jumpReady = false;
   private readonly dashDir = new THREE.Vector3();
@@ -152,7 +167,9 @@ export class Player {
 
   get isDashing(): boolean { return this.dashTimer > 0; }
   get isAirborne(): boolean { return this.jumpT >= 0; }
-
+  get isDiving(): boolean { return this.diveT >= 0; }
+  /** Đang bứt tốc hoặc vừa bứt tốc xong (còn được với xa thêm) */
+  get isLunging(): boolean { return this.lungeTimer > 0; } 
   /** Độ cao đang nhảy (m): đường parabol, cao nhất ở giữa thời gian bay */
   get jumpHeight(): number {
     if (this.jumpT < 0) return 0;
@@ -168,16 +185,33 @@ export class Player {
   /** Đếm giờ cú nhảy và thời gian khựng sau khi tiếp đất (client online cũng gọi để dự đoán) */
   tickJump(dt: number): void {
     this.landLock = Math.max(0, this.landLock - dt);
+    if (this.diveT >= 0) {
+      this.diveT += dt;
+      if (this.diveT >= DIVE.lock) this.diveT = -1; // đứng dậy xong
+    }
     if (this.jumpT >= 0) {
       this.jumpT += dt;
       if (this.jumpT >= JUMP.airTime) { this.jumpT = -1; this.landLock = JUMP.landingLock; } // tiếp đất
     }
+    this.diveT = -1;
   }
 
   startJump(): void {
     this.jumpT = 0;
     this.spend(JUMP.staminaCost);
   }
+
+  /** Lao người về phía điểm p (vị trí cầu lúc đánh trúng) */
+  startDive(p: THREE.Vector3): void {
+    const dir = new THREE.Vector3(p.x - this.pos.x, 0, p.z - this.pos.z).normalize();
+    this.diveT = 0;
+    this.diveYaw = Math.atan2(dir.x, dir.z);
+    this.dashTimer = 0;
+    this.sprintingNow = false;
+    this.vel.copy(dir).multiplyScalar(Math.max(Math.hypot(this.vel.x, this.vel.z), DIVE.slideSpeed));
+    this.cancelCharge();
+  }
+
   get isSprinting(): boolean { return this.sprintingNow; }
   spend(amount: number): void {
     this.stamina = Math.max(0, this.stamina - amount);
@@ -210,6 +244,13 @@ export class Player {
     if (dir.lengthSq() > 1) dir.normalize();
         // Trên không: giữ nguyên đà, không đổi hướng được. Vừa tiếp đất: khựng lại
     if (this.landLock > 0) { this.vel.set(0, 0, 0); this.sprintingNow = false; return; }
+    // Lao người: trượt theo đà, chậm dần, không điều khiển được
+    if (this.isDiving) {
+      this.vel.multiplyScalar(Math.exp(-DIVE.friction * dt));
+      this.pos.addScaledVector(this.vel, dt);
+      return;
+    }
+
     if (this.isAirborne) { this.pos.addScaledVector(this.vel, dt); return; }
     // Bứt tốc: lao nhanh theo hướng đang bấm
     if (intent.dash && canBurst && this.dashCd === 0 && dir.lengthSq() > 0.01 && !this.isDashing) {
@@ -248,6 +289,7 @@ export class Player {
    * Trả về Swing vừa bắt đầu (nếu có).
    */
   updateCharge(charge: ShotType | null, aim: Aim, dt: number): Swing | null {
+    if (this.isDiving) return null; // đang nằm sàn: giữ phím cũng không nạp lực
     if (charge && !this.swing && this.cooldown === 0) {
       if (this.chargingShot === null) this.chargeTime = 0;
       else this.chargeTime += dt;

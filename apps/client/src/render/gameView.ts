@@ -26,9 +26,11 @@ export class GameView {
   private readonly bars: StatusBars;
   private readonly cam: ThirdPersonCamera;
   private readonly match: Match;
+  private lastScore: { near: number; far: number };
 
   constructor(match: Match, local: Side) {
     this.match = match;
+    this.lastScore = { ...match.score };
     const me = match.players[local];
     const { scene, camera } = this.world;
     this.views = [new PlayerView(match.players.near, 0x1565c0), new PlayerView(match.players.far, 0xc62828)];
@@ -46,6 +48,11 @@ export class GameView {
 
   render(frameDt: number): void {
     const m = this.match;
+    // Vừa có người ghi điểm (so tỉ số, nên chạy được cả khi online): bên thắng ăn mừng, bên thua cúi đầu.
+    // Dùng tỉ số thay vì sự kiện của Match vì ở chế độ online Match chỉ là bản sao, không phát sự kiện
+    const scored = m.score.near > this.lastScore.near ? 'near' : m.score.far > this.lastScore.far ? 'far' : null;
+    if (scored) for (const v of this.views) v.react(v.side === scored);
+    this.lastScore = { ...m.score };
     for (const v of this.views) v.sync(frameDt, m.shuttlePos);
     this.shuttle.sync(m.shuttlePos, m.shuttleVel);
     this.landing.update();

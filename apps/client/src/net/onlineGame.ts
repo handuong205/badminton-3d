@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { Room } from '@colyseus/sdk';
 import { Match, keepInOwnHalf, shouldJumpSmash } from '@badminton/shared/match';
 import { FIXED_DT, stepShuttle } from '@badminton/shared/physics';
-import { Player, SWING, swingImpact } from '@badminton/shared/player';
+import { Player, SWING, DIVE, swingImpact } from '@badminton/shared/player';
 import type { InputMsg, PrivateSnap, RoomStatus, Snapshot } from '@badminton/shared/protocol';
 import { NET_H } from '@badminton/shared/rules';
 import { isServe } from '@badminton/shared/shots';
@@ -243,6 +243,16 @@ export class OnlineGame {
     me.landLock = Math.max(0, landLock - age);
   }
 
+    /**
+   * Lao người cứu cầu chỉ xảy ra trên server (lúc vợt chạm cầu), client không tự đoán được, nên lấy theo ảnh chụp.
+   * Cộng thêm nửa vòng khứ hồi vì ảnh chụp đã cũ ngần ấy. Đang lao thì me.move() trượt theo đà giống server.
+   */
+  private syncDive(me: Player, diveT: number, diveYaw: number): void {
+    if (diveT < 0) { me.diveT = -1; return; }
+    me.diveT = Math.min(diveT + this.rtt / 2, DIVE.lock - 0.001);
+    me.diveYaw = diveYaw;
+  }
+
   // ===== Mỗi khung hình: chuẩn bị dữ liệu để vẽ =====
   frame(frameDt: number): void {
     const s = this.latest;
@@ -282,6 +292,9 @@ export class OnlineGame {
     p.swing = src.swingShot ? { shot: src.swingShot, power: 0, aim: 0, t: src.swingT } : null;
     // Đối thủ bật nhảy: thấy được (để biết đường đỡ), nhưng vẫn không biết lực
     p.jumpT = pa.jumpT >= 0 && pb.jumpT >= 0 ? THREE.MathUtils.lerp(pa.jumpT, pb.jumpT, k) : src.jumpT;
+    p.landLock = src.landLock; // để vẽ động tác tiếp đất
+    p.diveT = pa.diveT >= 0 && pb.diveT >= 0 ? THREE.MathUtils.lerp(pa.diveT, pb.diveT, k) : src.diveT;
+    p.diveYaw = src.diveYaw;
   }
 
   /**
